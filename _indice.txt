@@ -1,0 +1,11 @@
+Copia de objetos de DBSIGCM (192.168.40.75)
+Generado: 2026-08-18 12:00:39
+
+cmn                      8 archivos
+dbo                      1 archivos
+integracion              4 archivos
+requerimiento            8 archivos
+siga                    24 archivos
+sigcm                   49 archivos
+
+Total: 94

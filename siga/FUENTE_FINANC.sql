@@ -1,0 +1,13 @@
+/*
+  Base    : DBSIGCM
+  Esquema : siga
+  Objeto  : siga.FUENTE_FINANC
+  Tipo    : SYNONYM
+  Extraido: 2026-08-18 11:59:35
+*/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE SYNONYM [siga].[FUENTE_FINANC] FOR [SIGA_1750].[dbo].[FUENTE_FINANC];
+GO

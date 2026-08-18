@@ -1,0 +1,13 @@
+/*
+  Base    : DBSIGCM
+  Esquema : siga
+  Objeto  : siga.UNIDAD_MEDIDA
+  Tipo    : SYNONYM
+  Extraido: 2026-08-18 11:59:35
+*/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE SYNONYM [siga].[UNIDAD_MEDIDA] FOR [SIGA_1750].[dbo].[UNIDAD_MEDIDA];
+GO
