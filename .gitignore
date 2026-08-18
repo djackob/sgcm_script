@@ -1,0 +1,15 @@
+# Bitacoras que deja instalar.ps1 en cada corrida. Son de la maquina que
+# instalo, no del proyecto.
+_bitacora/
+*.log
+
+# Salidas de C000B generadas al vuelo. La copia que SI se versiona es la de
+# docs/, que documenta un entorno concreto en una fecha concreta.
+diagnostico_*.txt
+
+# Ruido de Windows y de los editores
+Thumbs.db
+desktop.ini
+.vs/
+*.swp
+*~

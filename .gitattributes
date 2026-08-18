@@ -1,0 +1,12 @@
+# Fin de linea deterministico. Uno de los equipos es Windows y el servidor de
+# desarrollo corre sobre Linux; sin esto, cada guardado ensucia el diff con el
+# archivo entero y no se ve el cambio real.
+* text=auto
+
+*.sql text eol=lf
+*.md  text eol=lf
+*.txt text eol=lf
+*.csv text eol=lf
+
+# PowerShell se queda en CRLF: es la convencion de la herramienta en Windows.
+*.ps1 text eol=crlf

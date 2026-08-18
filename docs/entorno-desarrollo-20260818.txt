@@ -1,0 +1,96 @@
+bloque|concepto|valor
+------|--------|-----
+1. MOTOR|ServerName|localhost
+1. MOTOR|MachineName|localhost
+1. MOTOR|InstanceName|(instancia por defecto)
+1. MOTOR|ProductVersion|16.0.4262.2
+1. MOTOR|Version mayor|16
+1. MOTOR|Nombre comercial|SQL Server 2022
+1. MOTOR|ProductLevel|RTM
+1. MOTOR|ProductUpdateLevel|CU25
+1. MOTOR|Edition|Developer Edition (64-bit)
+1. MOTOR|EngineEdition|3
+1. MOTOR|Collation servidor|Modern_Spanish_CI_AS
+1. MOTOR|IsFullTextInstalled|0
+1. MOTOR|IsIntegratedSecurityOnly|0
+1. MOTOR|Login actual|developer_anin
+1. MOTOR|sysadmin|si
+1. MOTOR|dbcreator|si
+1. MOTOR|Fecha del diagnostico|2026-08-18 12:20:44
+1. MOTOR|@@VERSION|Microsoft SQL Server 2022 (RTM-CU25-GDR) (KB5101347) - 16.0.4262.2 (X64)  	Jun 18 2026 14:30:08  	Copyright (C) 2022 Microsoft Corporation 	Developer Edition (64-bit) on Linux (Rocky Linux 10.2 (Red Quartz)) <X64>
+bloque|base|compat_level|intercalacion|recovery|rcsi|estado|acceso|nota
+------|----|------------|-------------|--------|----|------|------|----
+2. BASES|DBSIGCM|160|Modern_Spanish_CI_AS|SIMPLE|1|ONLINE|MULTI_USER|<-- base SIGCM
+2. BASES|SIGA_1750|100|Modern_Spanish_CI_AS|SIMPLE|0|ONLINE|MULTI_USER|<-- base SIGA
+2. BASES|bd_prueba|160|Modern_Spanish_CI_AS|FULL|0|ONLINE|MULTI_USER|
+2. BASES|DB_SISCAS|120|Modern_Spanish_CI_AS|FULL|0|ONLINE|MULTI_USER|
+2. BASES|master|160|Modern_Spanish_CI_AS|SIMPLE|0|ONLINE|MULTI_USER|
+2. BASES|tempdb|160|Modern_Spanish_CI_AS|SIMPLE|0|ONLINE|MULTI_USER|
+bloque|base_esperada_siga|estado_siga|base_esperada_sigcm|estado_sigcm
+------|------------------|-----------|-------------------|------------
+2b. BASES CLAVE|SIGA_1750|existe|DBSIGCM|existe
+bloque|base|compat_level|intercalacion
+------|----|------------|-------------
+2c. CANDIDATAS SIGA|SIGA_1750|100|Modern_Spanish_CI_AS
+bloque|compat_maximo_soportado|compat_minimo_aprox|compat_objetivo_proyecto|lectura
+------|-----------------------|-------------------|------------------------|-------
+3. COMPAT|160|100|160|El motor admite compat 160: los scripts se pueden probar en la linea base del proyecto.
+bloque|grupo|capacidad|desde_version|usada_en_sigcm|soportado|alerta|error_del_motor
+------|-----|---------|-------------|--------------|---------|------|---------------
+4. CAPACIDADES|CADENAS|TRIM(x)|2017|SI|SI||NULL
+4. CAPACIDADES|CADENAS|TRIM(caracteres FROM x)|2022|NO|SI||NULL
+4. CAPACIDADES|CADENAS|LTRIM/RTRIM con caracteres|2022|NO|SI||NULL
+4. CAPACIDADES|CADENAS|CONCAT_WS|2017|SI (14x)|SI||NULL
+4. CAPACIDADES|CADENAS|STRING_AGG|2017|SI (6x)|SI||NULL
+4. CAPACIDADES|CADENAS|STRING_AGG ... WITHIN GROUP|2017|SI (3x)|SI||NULL
+4. CAPACIDADES|CADENAS|STRING_SPLIT|2016|NO|SI||NULL
+4. CAPACIDADES|CADENAS|STRING_SPLIT con ordinal|2022|NO|SI||NULL
+4. CAPACIDADES|CADENAS|TRANSLATE|2017|NO|SI||NULL
+4. CAPACIDADES|CADENAS|REGEXP_LIKE|2025|NO|NO||'REGEXP_LIKE' no es un nombre de función integrada reconocido.
+4. CAPACIDADES|CONSULTA|OFFSET / FETCH|2012|SI|SI||NULL
+4. CAPACIDADES|CONSULTA|clausula WINDOW|2022|NO|SI||NULL
+4. CAPACIDADES|CONSULTA|TRIM en agregado / SELECT ... INTO|2012|SI|SI||NULL
+4. CAPACIDADES|CONSULTA|THROW|2012|SI|SI||NULL
+4. CAPACIDADES|DDL|CREATE OR ALTER|2016 SP1|SI (34x)|SI||NULL
+4. CAPACIDADES|DDL|DROP TABLE IF EXISTS|2016|SI|SI||NULL
+4. CAPACIDADES|DDL|DROP PROCEDURE IF EXISTS|2016|SI|SI||NULL
+4. CAPACIDADES|DDL|ALTER TABLE ADD IF NOT EXISTS|no existe en T-SQL|NO|NO||Sintaxis incorrecta cerca de la palabra clave 'IF'.
+4. CAPACIDADES|DDL|SEQUENCE|2012|SI|SI||NULL
+4. CAPACIDADES|DDL|Tabla temporal de sistema (SYSTEM_VERSIONING)|2016|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|GENERATE_SERIES|2022|SI (4x)|SI||NULL
+4. CAPACIDADES|ESCALARES|GREATEST / LEAST|2022|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|IS DISTINCT FROM|2022|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|DATETRUNC|2022|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|DATE_BUCKET|2022|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|AT TIME ZONE|2016|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|TRY_CAST / TRY_CONVERT|2012|SI|SI||NULL
+4. CAPACIDADES|ESCALARES|COMPRESS / DECOMPRESS|2016|NO|SI||NULL
+4. CAPACIDADES|ESCALARES|APPROX_COUNT_DISTINCT|2019|NO|SI||NULL
+4. CAPACIDADES|JSON|FOR JSON PATH|2016|SI (62x)|SI||NULL
+4. CAPACIDADES|JSON|FOR JSON ... WITHOUT_ARRAY_WRAPPER|2016|SI|SI||NULL
+4. CAPACIDADES|JSON|OPENJSON|2016|SI (18x)|SI||NULL
+4. CAPACIDADES|JSON|OPENJSON WITH esquema|2016|SI|SI||NULL
+4. CAPACIDADES|JSON|JSON_VALUE|2016|SI (5x)|SI||NULL
+4. CAPACIDADES|JSON|JSON_QUERY|2016|SI (28x)|SI||NULL
+4. CAPACIDADES|JSON|JSON_MODIFY|2016|NO|SI||NULL
+4. CAPACIDADES|JSON|ISJSON|2016|SI|SI||NULL
+4. CAPACIDADES|JSON|ISJSON(x, OBJECT)|2022|NO|SI||NULL
+4. CAPACIDADES|JSON|JSON_OBJECT|2022|SI (2x)|SI||NULL
+4. CAPACIDADES|JSON|JSON_ARRAY|2022|NO|SI||NULL
+4. CAPACIDADES|JSON|JSON_PATH_EXISTS|2022|NO|SI||NULL
+4. CAPACIDADES|JSON|JSON_OBJECTAGG|2025|NO|NO||Sintaxis incorrecta cerca de 'JSON_OBJECTAGG'.
+4. CAPACIDADES|JSON|JSON_ARRAYAGG|2025|NO|NO||'JSON_ARRAYAGG' no es un nombre de función integrada reconocido.
+4. CAPACIDADES|JSON|tipo json nativo|2025|PROHIBIDO|SI||NULL
+bloque|version_motor|version_mayor|collation_servidor|capacidades_usadas_no_soportadas|veredicto
+------|-------------|-------------|------------------|--------------------------------|---------
+5. RESUMEN|16.0.4262.2|16|Modern_Spanish_CI_AS|0|El motor acepta todo lo que usan los scripts actuales. No hace falta reescribir nada.
+bloque|grupo|capacidad|requiere_version|error
+------|-----|---------|----------------|-----
+bloque|plataforma|distribucion|version_so
+------|----------|------------|----------
+6. SO|Linux|Rocky Linux|10.2
+bloque|max_server_memory_mb|memoria_fisica_mb|cpus
+------|--------------------|-----------------|----
+6b. RECURSOS|2147483647|19016|8
+ 
+=== Diagnostico terminado. Enviar el archivo de salida completo. ===
