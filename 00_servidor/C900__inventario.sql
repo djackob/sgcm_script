@@ -71,7 +71,8 @@ INSERT INTO @inventario (tipo, cantidad, esperado) VALUES
     (N'Vistas',         (SELECT COUNT(*) FROM sys.views WHERE is_ms_shipped = 0),  NULL),
     (N'Procedimientos', (SELECT COUNT(*) FROM sys.procedures WHERE is_ms_shipped = 0), NULL),
     (N'Funciones',      (SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN','IF','TF') AND is_ms_shipped = 0), NULL),
-    (N'Sinonimos',      (SELECT COUNT(*) FROM sys.synonyms), 14),
+    (N'Sinonimos maestros', (SELECT COUNT(*) FROM sys.synonyms
+                              WHERE name <> N'usp_ext_registrar_item_cmn'), 14),
     (N'Secuencias',     (SELECT COUNT(*) FROM sys.sequences), NULL),
     (N'Esquemas SIGCM', (SELECT COUNT(*) FROM sys.schemas
                           WHERE name IN (N'sigcm', N'integracion', N'siga', N'cmn',
@@ -117,20 +118,19 @@ SELECT N'2b. POR ESQUEMA' AS bloque,
 
 DECLARE @rotos int = 0;
 
+/* OBJECT_ID va sin tipo: en el esquema siga hay sinonimos hacia tablas y
+   tambien hacia el procedimiento usp_ext_registrar_item_cmn que usa W001. */
 SELECT @rotos = COUNT(*)
   FROM sys.synonyms sy
- WHERE OBJECT_ID(sy.base_object_name, N'U') IS NULL
-   AND OBJECT_ID(sy.base_object_name, N'V') IS NULL;
+ WHERE OBJECT_ID(sy.base_object_name) IS NULL;
 
 SELECT N'3. SINONIMOS' AS bloque,
        SCHEMA_NAME(sy.schema_id) + N'.' + sy.name AS sinonimo,
        sy.base_object_name                        AS apunta_a,
-       CASE WHEN OBJECT_ID(sy.base_object_name, N'U') IS NULL
-             AND OBJECT_ID(sy.base_object_name, N'V') IS NULL
+       CASE WHEN OBJECT_ID(sy.base_object_name) IS NULL
             THEN N'*** NO RESUELVE ***' ELSE N'OK' END AS estado
   FROM sys.synonyms sy
- ORDER BY CASE WHEN OBJECT_ID(sy.base_object_name, N'U') IS NULL
-                AND OBJECT_ID(sy.base_object_name, N'V') IS NULL THEN 0 ELSE 1 END,
+ ORDER BY CASE WHEN OBJECT_ID(sy.base_object_name) IS NULL THEN 0 ELSE 1 END,
           sy.name;
 
 IF @rotos > 0

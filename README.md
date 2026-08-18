@@ -29,7 +29,7 @@ según las tablas que toca. El razonamiento completo, con las mediciones, está 
 | `00_servidor/` | Preflight, creación de la base, sinónimos, inventario | `master` |
 | `db/00_ddl/` | `V*` — tablas, vistas, restricciones | `DBSIGCM` |
 | `db/10_api/` | `F*` — procedimientos y funciones del contrato | `DBSIGCM` |
-| `db/15_siga/` | `W*` — escritor hacia SIGA (todavía vacía, ADR-003) | `DBSIGCM` |
+| `db/15_siga/` | `W*` — escritor hacia SIGA, en simulación por ADR-003 | `DBSIGCM` |
 | `db/20_seed/` | `S*` — configuración: roles, estados, plazos | `DBSIGCM` |
 | `db/90_pruebas/` | `S900` — usuarios ficticios, solo local | `DBSIGCM` |
 | `docs/` | Reportes de entorno y de comparación entre entornos | — |
@@ -92,12 +92,24 @@ Cuando la serie y un volcado discrepan, manda la serie y el entorno se reinstala
 
 ## Pendientes conocidos
 
-- `db/15_siga/W001__escritor_cuadro_modificado.sql` no existe todavía. La
-  escritura real hacia SIGA está en modo simulación por ADR-003: las
-  transiciones encolan en `integracion.Operacion` y nadie vacía esa cola.
-  `SIGA/integracion/usp_ext_registrar_item_cmn.sql` es el procedimiento del lado
-  de SIGA que hace el `INSERT`, y está entregado para homologación, sin instalar.
-- `V010` / `S004`: indagación de mercado, cuadro de cotizaciones (Anexo 8), CCP
+- **Homologación de `usp_ext_registrar_item_cmn`.** Es el procedimiento que
+  corre dentro de `SIGA_1750` y hace el `INSERT`. Está entregado al ANIN para
+  revisión y todavía no instalado en desarrollo ni en producción. Hasta que lo
+  esté, `W001` solo puede correr en simulación. Es un trámite, no código.
+- **`W001` solo implementa `INCLUIR_ITEM`.** `EXCLUIR_ITEM`,
+  `MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` devuelven un error explícito.
+- **El worker que vacía la cola no existe.** Será un `BackgroundService` del
+  backend; hoy el drenaje se dispara a mano ejecutando
+  `integracion.paEscribirCuadroModificado`.
+- `V011` / `S004`: indagación de mercado, cuadro de cotizaciones (Anexo 8), CCP
   y orden.
 - Falta una tabla de migraciones aplicadas (DbUp) para dejar de reejecutar la
   serie completa en cada despliegue.
+
+## Estado verificado
+
+Probado de punta a punta en local el 2026-08-18, contra la copia restaurada de
+`SIGA_1750`: registro de solicitud, las seis transiciones hasta
+`CMN_VALIDAR_UA`, encolado y drenaje en modo real. Escribió la cabecera 170 y su
+ítem en `SIG_CUADRO_NECESIDAD` / `_DET` (`CANT_03 = 40`, `MNTO_TOTAL = 500.00`) y
+dejó la correspondencia en `integracion.MapeoCmn`.

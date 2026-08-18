@@ -106,9 +106,13 @@ GO
 
 SET NOCOUNT ON;
 
+/* OBJECT_ID va SIN tipo a proposito. Forzando 'U' solo resuelven las tablas, y
+   en el esquema siga tambien vive el sinonimo hacia
+   usp_ext_registrar_item_cmn que crea W001, que es un procedimiento: con 'U'
+   se reportaba como no resuelto y abortaba una instalacion sana. */
 SELECT s.name                         AS sinonimo,
        s.base_object_name             AS apunta_a,
-       CASE WHEN OBJECT_ID(s.base_object_name, N'U') IS NULL
+       CASE WHEN OBJECT_ID(s.base_object_name) IS NULL
             THEN 'NO RESUELVE' ELSE 'OK' END AS estado
   FROM sys.synonyms s
  WHERE SCHEMA_NAME(s.schema_id) = N'siga'
@@ -116,7 +120,7 @@ SELECT s.name                         AS sinonimo,
 
 IF EXISTS (SELECT 1 FROM sys.synonyms s
             WHERE SCHEMA_NAME(s.schema_id) = N'siga'
-              AND OBJECT_ID(s.base_object_name, N'U') IS NULL)
+              AND OBJECT_ID(s.base_object_name) IS NULL)
 BEGIN
     RAISERROR(N'Hay sinonimos que no resuelven. Revisa el nombre de la base o los permisos.', 16, 1);
 END

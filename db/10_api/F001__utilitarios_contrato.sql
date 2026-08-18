@@ -266,9 +266,18 @@ GO
 /*
   Genera el codigo visible de un expediente: PREFIJO-ANIO-000123.
 
-  Es procedimiento y no funcion porque NEXT VALUE FOR no se admite dentro de una
-  funcion escalar. El nombre de la secuencia se recibe como texto para que cada
-  modulo use la suya sin duplicar este codigo.
+  El contador vive en sigcm.Correlativo (V010), no en una SEQUENCE. La razon
+  esta explicada a fondo en V010; en una linea: una secuencia entrega el numero
+  FUERA de la transaccion, asi que un rollback deja un hueco en la numeracion, y
+  el codigo de expediente es el numero con el que un auditor lo pide.
+
+  @Secuencia conserva el nombre y el formato que ya usaban las rutinas que
+  llaman aqui (N'cmn.SeqSolicitud'): hoy es la clave de la fila del contador, no
+  el nombre de un objeto. Se mantiene asi para no tocar las llamadas.
+
+  El UPDLOCK/HOLDLOCK al comprobar la existencia evita que dos registros
+  simultaneos inserten la misma fila; la asignacion encadenada del UPDATE lee y
+  escribe en una sola operacion, sin ventana entre ambas.
 */
 CREATE OR ALTER PROCEDURE sigcm.paSiguienteCodigo
     @Prefijo   varchar(10),
@@ -279,15 +288,20 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    IF OBJECT_ID(@Secuencia, N'SO') IS NULL
-    BEGIN
-        DECLARE @err nvarchar(300) = CONCAT('No existe la secuencia ', @Secuencia, '.');
-        THROW 51010, @err, 1;
-    END
+    IF NULLIF(LTRIM(RTRIM(@Secuencia)), '') IS NULL
+        THROW 51010, 'No se indico el nombre del correlativo.', 1;
 
     DECLARE @Valor bigint;
-    DECLARE @sql nvarchar(400) = N'SELECT @v = NEXT VALUE FOR ' + @Secuencia + N';';
-    EXEC sys.sp_executesql @sql, N'@v bigint OUTPUT', @v = @Valor OUTPUT;
+
+    /* Sin transaccion propia: se toma la del llamador, que es justamente lo que
+       hace que el numero se devuelva si el registro se deshace. */
+    IF NOT EXISTS (SELECT 1 FROM sigcm.Correlativo WITH (UPDLOCK, HOLDLOCK)
+                    WHERE Nombre = @Secuencia)
+        INSERT INTO sigcm.Correlativo (Nombre, Valor) VALUES (@Secuencia, 0);
+
+    UPDATE sigcm.Correlativo
+       SET @Valor = Valor = Valor + 1
+     WHERE Nombre = @Secuencia;
 
     SET @Codigo = CONCAT(@Prefijo, '-', CONVERT(varchar(4), @AnoEje), '-',
                          RIGHT(CONCAT('000000', CONVERT(varchar(20), @Valor)), 6));
