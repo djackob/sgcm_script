@@ -43,8 +43,9 @@ GO
 /* 1. Modulos                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/* Activo = 0 en los cinco pendientes: estan declarados para que la matriz de
+/* Activo = 0 en los cuatro pendientes: estan declarados para que la matriz de
    acceso y la maquina de estados no cambien de forma, pero no son navegables.
+   CMN y REQUERIMIENTO ya tienen pantalla y por eso van activos y con ruta.
 
    Ruta e Icono se siembran AQUI y no en V007. La columna la crea V007, que es
    estructura; el valor es dato de semilla y este es el archivo que lo tiene.
@@ -60,13 +61,17 @@ DECLARE @Modulo TABLE (CodigoModulo varchar(30), Nombre varchar(150), Orden int,
                        Activo bit, Ruta varchar(100), Icono varchar(60));
 INSERT INTO @Modulo VALUES
   ('CMN',           'Gestion CMN',                  10, 1, 'gestion-cmn', 'mdi mdi-clipboard-list-outline'),
-  ('REQUERIMIENTO', 'Requerimiento a Notificacion', 20, 0, NULL,          'mdi mdi-clipboard-text-outline'),
+  ('REQUERIMIENTO', 'Requerimiento a Notificacion', 20, 1, 'gestion-requerimiento', 'mdi mdi-clipboard-text-outline'),
   ('EJECUCION',     'Ejecucion',                    30, 0, NULL,          'mdi mdi-progress-check'),
   ('PAGO',          'Pago',                         40, 0, NULL,          'mdi mdi-cash-multiple'),
   ('MODIFICACION',  'Modificacion-Ampliacion',      50, 0, NULL,          'mdi mdi-file-document-edit-outline'),
   ('RESOLUCION',    'Resolucion',                   60, 0, NULL,          'mdi mdi-file-cancel-outline');
 
-UPDATE d SET d.Nombre = s.Nombre, d.Orden = s.Orden,
+/* Activo va en el UPDATE junto con el resto. Es dato de semilla igual que la
+   ruta —declara si el modulo ya tiene pantalla—, y dejarlo fuera hacia que
+   estrenar un modulo funcionara solo al recrear la base: sobre una base ya
+   instalada el UPDATE le cambiaba la ruta y lo dejaba apagado. */
+UPDATE d SET d.Nombre = s.Nombre, d.Orden = s.Orden, d.Activo = s.Activo,
              d.Ruta   = s.Ruta,   d.Icono = s.Icono
   FROM sigcm.Modulo AS d JOIN @Modulo AS s ON s.CodigoModulo = d.CodigoModulo;
 
