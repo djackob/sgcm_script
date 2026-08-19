@@ -23,7 +23,7 @@ GO
     "Filtro": { "SoloMiBandeja": true, "CodigoEstado": "...", "AnoEje": 2026,
                 "CentroCosto": "...", "Texto": "...", "Limite": 50, "Desplazamiento": 0 } }
 */
-CREATE   PROCEDURE cmn.paListarSolicitud
+CREATE OR ALTER PROCEDURE cmn.paListarSolicitud
     @parametro nvarchar(max)
 AS
 BEGIN
@@ -31,30 +31,24 @@ BEGIN
     SET XACT_ABORT ON;
     SET LOCK_TIMEOUT 5000;
     SET DEADLOCK_PRIORITY LOW;
-
     DECLARE @resultado nvarchar(max);
-
     BEGIN TRY
         IF sigcm.fnEsJson(@parametro) <> 1
             RAISERROR('JSON incorrecto.', 16, 1);
-
         DECLARE @IdUsuario uniqueidentifier, @Cuenta varchar(120),
                 @NombreCompleto varchar(250), @Cargo varchar(180),
                 @CodigoRol varchar(40), @IdUnidad uniqueidentifier,
                 @CentroCostoActor varchar(15), @EsTitular bit,
                 @Ip varchar(45), @Equipo varchar(50), @Programa varchar(50),
                 @CorrelacionId uniqueidentifier;
-
         EXEC sigcm.paResolverActor @parametro,
              @IdUsuario OUTPUT, @Cuenta OUTPUT, @NombreCompleto OUTPUT, @Cargo OUTPUT,
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
-
         DECLARE @SoloMiBandeja bit, @CodigoEstado varchar(60), @AnoEje smallint,
                 @CentroCosto varchar(15), @Texto varchar(200),
                 @Limite int, @Desplazamiento int,
                 @SoloTxt nvarchar(20);
-
         SET @SoloTxt        = sigcm.fnJsonTexto(@parametro, 'Filtro.SoloMiBandeja');
         SET @SoloMiBandeja  = CASE
                                 WHEN @SoloTxt IS NULL THEN 1
@@ -68,15 +62,12 @@ BEGIN
         SET @Texto          = sigcm.fnJsonTexto(@parametro, 'Filtro.Texto');
         SET @Limite         = sigcm.fnJsonEntero(@parametro, 'Filtro.Limite');
         SET @Desplazamiento = sigcm.fnJsonEntero(@parametro, 'Filtro.Desplazamiento');
-
         SET @SoloMiBandeja  = ISNULL(@SoloMiBandeja, 1);
         SET @Limite         = CASE WHEN @Limite IS NULL OR @Limite <= 0 THEN 50
                                    WHEN @Limite > 200 THEN 200 ELSE @Limite END;
         SET @Desplazamiento = CASE WHEN @Desplazamiento IS NULL OR @Desplazamiento < 0
                                    THEN 0 ELSE @Desplazamiento END;
-
         DECLARE @Total int;
-
         SELECT @Total = COUNT(*)
           FROM cmn.Solicitud AS s
           JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
@@ -89,7 +80,6 @@ BEGIN
            AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
            AND (@Texto        IS NULL OR s.Codigo LIKE '%' + @Texto + '%'
                                       OR s.Sustento LIKE '%' + @Texto + '%');
-
         DECLARE @Solicitudes nvarchar(max);
         SET @Solicitudes = N'[' + ISNULL(STUFF((
             SELECT N',' + N'{'
@@ -107,6 +97,8 @@ BEGIN
                 + N',"RolResponsable":' + sigcm.fnJsonValorTexto(t.RolResponsable)
                 + N',"Items":'          + CONVERT(nvarchar(20), t.Items)
                 + N',"MontoTotal":'     + CONVERT(nvarchar(40), t.MontoTotal)
+                + N',"DocumentoSistemaAnexo3":' + sigcm.fnJsonValorTexto(t.DocumentoSistemaAnexo3)
+                + N',"DocumentoSistemaAnexo4":' + sigcm.fnJsonValorTexto(t.DocumentoSistemaAnexo4)
                 + N',"ActualizadoEn":'  + sigcm.fnJsonValorTexto(CONVERT(varchar(23), t.ActualizadoEn, 126))
                 + N'}'
             FROM (
@@ -122,12 +114,34 @@ BEGIN
                                        JOIN cmn.SolicitudItemPeriodo AS p
                                          ON p.IdSolicitudItem = it.IdSolicitudItem
                                       WHERE it.IdSolicitud = s.IdSolicitud),
+                       DocumentoSistemaAnexo3 = a3.Doc,
+                       DocumentoSistemaAnexo4 = a4.Doc,
                        ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
                        Fila = ROW_NUMBER() OVER (
                            ORDER BY ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC)
                   FROM cmn.Solicitud AS s
                   JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
                   JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
+                  OUTER APPLY (
+                      SELECT TOP 1 dv.GeneradoDocumento AS Doc
+                        FROM sigcm.Documento AS d
+                        JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+                        JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                         AND dv.Version = d.VersionVigente
+                       WHERE de.IdExpediente = e.IdExpediente
+                         AND d.CodigoTipoDocumento = N'CMN_ANEXO_3_SOLICITUD_MODIFICACION'
+                         AND d.Anulado = 0 AND d.Activo = 1
+                  ) AS a3
+                  OUTER APPLY (
+                      SELECT TOP 1 dv.GeneradoDocumento AS Doc
+                        FROM sigcm.Documento AS d
+                        JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+                        JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                         AND dv.Version = d.VersionVigente
+                       WHERE de.IdExpediente = e.IdExpediente
+                         AND d.CodigoTipoDocumento = N'CMN_ANEXO_4_APROBACION_MODIFICACION'
+                         AND d.Anulado = 0 AND d.Activo = 1
+                  ) AS a4
                  WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
                    AND (@SoloMiBandeja = 0
                         OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
@@ -141,14 +155,12 @@ BEGIN
             ORDER BY t.Fila
             FOR XML PATH(N''), TYPE
         ).value(N'.', N'nvarchar(max)'), 1, 1, N''), N'') + N']';
-
         SET @resultado = N'{"estado":1'
             + N',"total":'          + CONVERT(nvarchar(20), @Total)
             + N',"limite":'         + CONVERT(nvarchar(20), @Limite)
             + N',"desplazamiento":' + CONVERT(nvarchar(20), @Desplazamiento)
             + N',"Solicitudes":'    + ISNULL(@Solicitudes, N'[]')
             + N',"mensaje":"OK"}';
-
         SELECT @resultado;
     END TRY
     BEGIN CATCH
@@ -160,3 +172,4 @@ BEGIN
     END CATCH
 END
 GO
+

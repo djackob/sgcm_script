@@ -17,7 +17,7 @@ GO
    item. Es lo que consume el visor del Anexo 3.
 
    Entrada: { "Actor": {...}, "IdSolicitud": "..." } */
-CREATE   PROCEDURE cmn.paObtenerSolicitud
+CREATE OR ALTER PROCEDURE cmn.paObtenerSolicitud
     @parametro nvarchar(max)
 AS
 BEGIN
@@ -25,34 +25,26 @@ BEGIN
     SET XACT_ABORT ON;
     SET LOCK_TIMEOUT 5000;
     SET DEADLOCK_PRIORITY LOW;
-
     DECLARE @resultado nvarchar(max);
-
     BEGIN TRY
         IF sigcm.fnEsJson(@parametro) <> 1
             RAISERROR('JSON incorrecto.', 16, 1);
-
         DECLARE @IdUsuario uniqueidentifier, @Cuenta varchar(120),
                 @NombreCompleto varchar(250), @Cargo varchar(180),
                 @CodigoRol varchar(40), @IdUnidad uniqueidentifier,
                 @CentroCostoActor varchar(15), @EsTitular bit,
                 @Ip varchar(45), @Equipo varchar(50), @Programa varchar(50),
                 @CorrelacionId uniqueidentifier;
-
         EXEC sigcm.paResolverActor @parametro,
              @IdUsuario OUTPUT, @Cuenta OUTPUT, @NombreCompleto OUTPUT, @Cargo OUTPUT,
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
-
         DECLARE @IdSolicitud uniqueidentifier;
         SET @IdSolicitud = sigcm.fnTryGuid(sigcm.fnJsonTexto(@parametro, 'IdSolicitud'));
-
         IF @IdSolicitud IS NULL
             RAISERROR('VALIDACION_PAYLOAD: falta IdSolicitud o no es un identificador valido.', 16, 1);
-
         IF NOT EXISTS (SELECT 1 FROM cmn.Solicitud WHERE IdSolicitud = @IdSolicitud AND Activo = 1)
             RAISERROR('NO_ENCONTRADO: la solicitud no existe.', 16, 1);
-
         DECLARE @ItemsJson nvarchar(max);
         SET @ItemsJson = N'[' + ISNULL(STUFF((
             SELECT N',' + N'{'
@@ -99,7 +91,6 @@ BEGIN
             ORDER BY r.Orden
             FOR XML PATH(N''), TYPE
         ).value(N'.', N'nvarchar(max)'), 1, 1, N''), N'') + N']';
-
         SELECT @resultado = N'{"estado":1'
             + N',"IdSolicitud":'       + sigcm.fnJsonValorTexto(CONVERT(varchar(36), s.IdSolicitud))
             + N',"Codigo":'             + sigcm.fnJsonValorTexto(s.Codigo)
@@ -117,6 +108,8 @@ BEGIN
             + N',"Estado":'             + sigcm.fnJsonValorTexto(w.Nombre)
             + N',"Responsable":'        + sigcm.fnJsonValorTexto(LTRIM(RTRIM(ISNULL(u.Nombres, '') + N' ' + ISNULL(u.Apellidos, ''))))
             + N',"CentroCostoNombre":'  + sigcm.fnJsonValorTexto(cc.NombreDepend)
+            + N',"DocumentoSistemaAnexo3":' + sigcm.fnJsonValorTexto(a3.Doc)
+            + N',"DocumentoSistemaAnexo4":' + sigcm.fnJsonValorTexto(a4.Doc)
             + N',"Items":'              + ISNULL(@ItemsJson, N'[]')
             + N',"mensaje":"OK"}'
           FROM cmn.Solicitud AS s
@@ -126,8 +119,27 @@ BEGIN
           LEFT JOIN siga.vwCentroCosto AS cc
                  ON cc.AnoEje = s.AnoEje AND cc.SecEjec = s.SecEjec
                 AND cc.CentroCosto = s.CentroCosto
+          OUTER APPLY (
+              SELECT TOP 1 dv.GeneradoDocumento AS Doc
+                FROM sigcm.Documento AS d
+                JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+                JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                 AND dv.Version = d.VersionVigente
+               WHERE de.IdExpediente = e.IdExpediente
+                 AND d.CodigoTipoDocumento = N'CMN_ANEXO_3_SOLICITUD_MODIFICACION'
+                 AND d.Anulado = 0 AND d.Activo = 1
+          ) AS a3
+          OUTER APPLY (
+              SELECT TOP 1 dv.GeneradoDocumento AS Doc
+                FROM sigcm.Documento AS d
+                JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+                JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                 AND dv.Version = d.VersionVigente
+               WHERE de.IdExpediente = e.IdExpediente
+                 AND d.CodigoTipoDocumento = N'CMN_ANEXO_4_APROBACION_MODIFICACION'
+                 AND d.Anulado = 0 AND d.Activo = 1
+          ) AS a4
          WHERE s.IdSolicitud = @IdSolicitud;
-
         SELECT @resultado;
     END TRY
     BEGIN CATCH
@@ -139,3 +151,4 @@ BEGIN
     END CATCH
 END
 GO
+
