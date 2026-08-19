@@ -98,9 +98,10 @@ Cuando la serie y un volcado discrepan, manda la serie y el entorno se reinstala
   esté, `W001` solo puede correr en simulación. Es un trámite, no código.
 - **`W001` solo implementa `INCLUIR_ITEM`.** `EXCLUIR_ITEM`,
   `MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` devuelven un error explícito.
-- **El worker que vacía la cola no existe.** Será un `BackgroundService` del
-  backend; hoy el drenaje se dispara a mano ejecutando
-  `integracion.paEscribirCuadroModificado`.
+- **El worker de integración está implementado en el backend.** Se despliega
+  apagado y en simulación por defecto; cada ambiente debe habilitarlo de forma
+  explícita. Usa `sp_getapplock` para que una sola réplica drene la cola y llama
+  a `integracion.paEscribirCuadroModificado` sin reimplementar reglas de SIGA.
 - `V011` / `S004`: indagación de mercado, cuadro de cotizaciones (Anexo 8), CCP
   y orden.
 - Falta una tabla de migraciones aplicadas (DbUp) para dejar de reejecutar la

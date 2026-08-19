@@ -197,19 +197,37 @@ no lo que se pidió.
 Hoy `W001` solo implementa `INCLUIR_ITEM`. `EXCLUIR_ITEM`,
 `MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` devuelven un error explícito.
 
-### 3. El worker .NET — todavía no existe
+### 3. El worker .NET
 
-La cola está pensada para que la vacíe un `BackgroundService` del backend, con
-cuenta técnica y sin usuario delante. **Ese worker no está escrito.**
-`IntegracionController` no tiene endpoints, y su propio comentario dice que no
-es un olvido.
+La cola la vacía `IntegracionSigaWorker`, un `BackgroundService` que forma parte
+del backend. No es un servicio ni un despliegue adicional. Cada réplica intenta
+tomar un `sp_getapplock`; sólo la que obtiene el bloqueo ejecuta W001, por lo que
+es seguro desplegar más de una réplica de la API.
 
-**No hay que instalar nada en desarrollo por este punto**, porque no hay nada
-que instalar: cuando exista, será parte del backend y se desplegará con él,
-igual que el resto de la API. No es un componente aparte.
+Está **deshabilitado por defecto** en `appsettings.json`. Las opciones son:
 
-Mientras tanto, el drenaje se dispara a mano ejecutando el procedimiento de
-arriba. Para probar el flujo completo en desarrollo eso alcanza.
+```json
+"IntegracionSiga": {
+  "Habilitado": false,
+  "Modo": "simulacion",
+  "Conexion": "cnx_integracion",
+  "IntervaloSegundos": 30,
+  "EsperaInicialSegundos": 5,
+  "Limite": 20,
+  "TimeoutSegundos": 90,
+  "UsuarioAuditoria": "sigcm-worker"
+}
+```
+
+La cadena indicada por `Conexion` debe abrir **DBSIGCM**, no `SIGA_1750`: W001
+se ejecuta en DBSIGCM y cruza a SIGA mediante el sinónimo homologado. La cuenta
+técnica debe tener acceso a DBSIGCM, `EXECUTE` sobre W001 y permiso efectivo
+sobre el procedimiento de SIGA. Las credenciales se configuran por variables de
+entorno o en un `appsettings.Local.json` excluido de Git; nunca en este manual.
+
+Para habilitar escritura deben configurarse `Habilitado=true` y `Modo=real`.
+En desarrollo sólo se hace después de que el equipo de SIGA instale y autorice
+`usp_ext_registrar_item_cmn`.
 
 ### Cómo verificar que llegó
 
