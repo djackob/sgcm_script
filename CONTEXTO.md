@@ -170,6 +170,111 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-08-20 (noche) — La firma: el PDF que la bandeja no sabía encontrar
+
+**Qué pidió el negocio.** Integrar lo que el otro desarrollador hizo con la
+firma. Trabajó sobre la copia del front de la semana pasada
+(`CAMBIOS_ANIN/sgcm_front_anin`) y entregó dos procedimientos,
+`paListarSolicitud` y `paObtenerSolicitud`.
+
+**Cuál era el defecto real.** No faltaba pantalla ni faltaba botón: el front ya
+tenía el visor, los dos botones de Anexo y `SolicitudCmn.DocumentoSistemaAnexo3`
+/ `Anexo4` en el modelo. Lo que faltaba era que **la base devolviera esos dos
+campos**. El front solo conocía el archivo dentro de la sesión en que lo había
+generado; al recargar la bandeja el botón se quedaba sin nada que abrir, y quien
+tenía que firmar no veía el documento que estaba firmando.
+
+**Qué se construyó:**
+
+| Pieza | Dónde |
+|---|---|
+| `cmn.fnDocumentoVigente` — versión vigente del documento vivo de un tipo | `db/10_api/F002__cmn_solicitud.sql` |
+| `DocumentoSistemaAnexo3` / `Anexo4` en la bandeja y en el detalle | `db/10_api/F002__cmn_solicitud.sql` |
+| `blobParaVisor` — repone el MIME cuando el file server no lo declara | `../../anin_scm_front/…/gestion-cmn/gestion-cmn.component.ts` |
+| El borrador ya no deja PDF en el file server; el aviso ya no lo promete | `../../anin_scm_front/…/modals/modal-registro/` |
+| El icono del Anexo 3 aparece sólo si hay archivo; el visor abre el del servidor | `../../anin_scm_front/…/gestion-cmn/` |
+| La entrega original, tal como llegó, y por qué no se ejecutó | `_snapshot/cambios-anin-20260820/` |
+
+**El momento en que nace el PDF.** El registro de la solicitud armaba y subía el
+Anexo 3 en el acto. Adelantaba un paso que el flujo tiene aparte: el expediente
+nacía en `BORRADOR` pero ya con documento, la bandeja ofrecía el icono de un
+Anexo 3 que nadie había generado, y el aviso prometía un archivo «guardado en el
+servidor» que no correspondía a ningún estado del trámite. Ahora el PDF lo emite
+`CMN_GENERAR_A3`, que es la transición que lo declara hecho, y el icono aparece
+recién entonces. La subsanación es la excepción deliberada: ahí el documento ya
+existe, se corrigió lo observado y `CMN_SUBSANAR` no produce documento, así que
+el modal lo rehace.
+
+**El visor muestra el archivo, no una reconstrucción.** Para los estados
+anteriores a la firma el navegador rearmaba el PDF con la plantilla vigente en
+vez de bajarlo. La intención era no mostrar algo desactualizado; el efecto era
+peor, porque lo que se veía —y lo que se firmaba— no era el archivo registrado
+en el expediente. Se retiraron `generarYMostrarAnexo3` y
+`ESTADOS_ANEXO3_ARCHIVO_OFICIAL`.
+
+**Decisiones que no hay que volver a discutir:**
+
+- **La entrega se portó, no se aplicó.** Los dos scripts vienen en el dialecto
+  del volcado `desarrollo-20260818`: usan `sigcm.fnEsJson`, `fnJsonTexto`,
+  `fnJsonEntero`, `fnJsonValorTexto` y `fnTryGuid`, que **no existen en
+  `DBSIGCM`**, y arman el JSON con `FOR XML PATH`. Habrían compilado y fallado
+  en la primera llamada. Además son de antes del Anexo 4 múltiple: su bandeja no
+  trae `AreaUsuaria`, `SiglaArea`, `IdPaquete` ni `CodigoAnexo4`, y aplicarlos
+  habría deshecho la iteración anterior a cambio de dos campos.
+- **Una función inline en vez de cuatro `OUTER APPLY`.** Dos rutinas por dos
+  tipos de documento es la misma consulta de tres tablas repetida cuatro veces.
+  `cmn.fnDocumentoVigente` la define una vez; el optimizador la expande igual.
+- **`blobParaVisor` se porta aunque local no lo necesite.** El backend local
+  sirve el PDF con su tipo real, pero el file server de la ANIN responde
+  `application/octet-stream` y con ese tipo el `<iframe>` descarga en vez de
+  dibujar. Es la diferencia entre los dos ambientes, y el mismo código tiene que
+  servir para los dos.
+- **El file server local ya estaba resuelto.** `appsettings.Local.json` apunta
+  `rutafile` a `anin_scm_back/.local-files` con `file_servicio_externo: false`,
+  y `UT_File.TryRutaFisica` resuelve la subcarpeta `cmn`. No hacía falta tocar
+  nada del backend.
+
+**Cómo se prueba.** Sin SIGA. Con la base instalada, `cmn.paListarSolicitud`
+devuelve `DocumentoSistemaAnexo3` en los expedientes que ya generaron su Anexo 3
+y `DocumentoSistemaAnexo4` en los que tienen paquete; los archivos que nombra
+existen bajo `.local-files/cmn/`. En pantalla: recargar la bandeja y abrir el
+Anexo de una fila firmada —antes del cambio, el botón no tenía qué abrir.
+
+**Pendientes — dos defectos abiertos y una pieza que no llegó:**
+
+1. **`cmn.paRegistrarSolicitud` no sabe actualizar.** Su `OPENJSON` no lee
+   `IdSolicitud` y el `INSERT INTO sigcm.Expediente` es incondicional, así que
+   **subsanar una observación crea un expediente nuevo con correlativo nuevo**
+   en lugar de corregir el existente; el `IdSolicitud` que el front envía al
+   editar se descarta en silencio. Hasta arreglarlo no se puede ofrecer editar
+   un borrador, que es lo que pidió el negocio.
+2. **La firma digital ONPE no está en la entrega.** El bloque `firma`
+   (`ruta_js`, `ruta_metodo`, `ruta_iframe`, `ruta_carpeta`, `ruta_respuesta`,
+   `ruta_archivo`) está **declarado en `AppConfig` de los dos proyectos pero no
+   lo lee ningún código**, y no aparece en ningún `config.json`. En desarrollo
+   el visor abre `sfirma.anin.gob.pe` y desde ahí el cliente FIRMA ONPE firma el
+   PDF; ese código va en una versión posterior a la de `CAMBIOS_ANIN`. Lo
+   resuelve el otro desarrollador. **Ojo con el límite físico:** `sfirma` lee el
+   PDF de la carpeta compartida, y en local los archivos viven en
+   `anin_scm_back/.local-files/cmn/`, que ese host no alcanza.
+   Distíngase de `sigcm.paFirmarDocumento`, que sí funciona y es otra capa: la
+   firma **del trámite** —quién firmó, en qué orden, `PARCIAL` hasta la última—,
+   no la firma criptográfica sobre el PDF.
+3. Las filas semilla de `CMN-2026-000008/9/10` guardan una URL
+   (`http://localhost/files/cmn/…-anexo3.pdf`) en vez de un id, y esos archivos
+   no existen en disco: el visor responderá «no fue posible descargar». Es dato
+   de semilla anterior, no del flujo; se corrige regenerando esos casos.
+
+**Nota de datos para probar.** El desplegable de Meta trae las 487 metas de la
+entidad, pero cada área usuaria tiene techo en **una sola**; con cualquier otra
+el clasificador queda vacío y la pantalla no explica por qué. Las combinaciones
+válidas en 2026 (fuente `1-00` en todas) son: US `01.07.05.02` meta 14 (13
+clasificadores), ORH `01.07.04` meta 18 (11), OGP `01.06.03` metas 257 y 6,
+UDS `01.07.05.01` meta 11, UOP `01.01` meta 5, OTI `01.07.05.03` meta 15 (2).
+Filtrar las metas por techo del centro de costo queda pendiente.
+
+---
+
 ### 2026-08-20 — Flujo CMN con tres perfiles de Abastecimiento y Anexo 4 múltiple
 
 **Qué pidió el negocio.** Que el circuito de Abastecimiento pase por sus tres

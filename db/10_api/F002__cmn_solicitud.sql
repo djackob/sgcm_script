@@ -52,6 +52,54 @@ SET NOCOUNT ON;
 GO
 
 /* ========================================================================== */
+/* 0. cmn.fnDocumentoVigente                                                 */
+/* ========================================================================== */
+
+/*
+  El archivo del file server que corresponde HOY a un tipo de documento de un
+  expediente: la version vigente del unico documento vivo de ese tipo.
+
+  Por que existe. La pantalla necesita el PDF ya subido para dos cosas: abrirlo
+  al firmar y volver a mostrarlo despues. Sin este dato en la bandeja, el front
+  solo conoce el archivo dentro de la sesion en que lo genero; al recargar, el
+  boton de ver el Anexo se quedaba sin nada que abrir, y el que firmaba no veia
+  el documento que estaba firmando.
+
+  Por que es una funcion y no un OUTER APPLY repetido. Lo consultan las dos
+  rutinas de lectura, por dos tipos de documento cada una: cuatro copias del
+  mismo JOIN de tres tablas. Una sola definicion evita que se separen.
+
+  El TOP 1 no deberia hacer falta —el indice unico filtrado deja un documento
+  vivo por tipo y expediente— pero el ORDER BY lo hace determinista si alguna
+  vez lo hiciera. Es inline: el optimizador la expande, no cuesta nada frente
+  al APPLY escrito a mano.
+*/
+CREATE OR ALTER FUNCTION cmn.fnDocumentoVigente
+(
+    @IdExpediente        uniqueidentifier,
+    @CodigoTipoDocumento varchar(60)
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT TOP 1
+           dv.GeneradoDocumento,
+           dv.NombreDocumento,
+           dv.Estado AS EstadoVersion,
+           d.VersionVigente
+      FROM sigcm.Documento AS d
+      JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+      JOIN sigcm.DocumentoVersion    AS dv ON dv.IdDocumento = d.IdDocumento
+                                          AND dv.Version     = d.VersionVigente
+     WHERE de.IdExpediente        = @IdExpediente
+       AND d.CodigoTipoDocumento  = @CodigoTipoDocumento
+       AND d.Anulado = 0 AND d.Activo = 1
+     ORDER BY d.FechaCreacionAuditoria DESC
+);
+GO
+
+/* ========================================================================== */
 /* 1. cmn.paRegistrarSolicitud                                               */
 /* ========================================================================== */
 
@@ -610,6 +658,12 @@ BEGIN
                    Estado = w.Nombre,
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
                    CentroCostoNombre = cc.NombreDepend,
+                   /* El PDF que vive en el file server, para firmarlo y para
+                      volver a verlo. Sin esto la pantalla solo conoce el archivo
+                      dentro de la sesion en que lo genero: al recargar, el boton
+                      de ver el Anexo se quedaba sin nada que abrir. */
+                   DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
+                   DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
                    Items = JSON_QUERY(COALESCE((
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
@@ -636,6 +690,8 @@ BEGIN
               LEFT JOIN siga.vwCentroCosto AS cc
                      ON cc.AnoEje = s.AnoEje AND cc.SecEjec = s.SecEjec
                     AND cc.CentroCosto = s.CentroCosto
+              OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
+              OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
              WHERE s.IdSolicitud = @IdSolicitud
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
@@ -773,6 +829,12 @@ BEGIN
                                  en la seleccion algo ya tomado. */
                               pq.IdPaquete,
                               CodigoAnexo4 = pq.Codigo,
+                              /* El PDF ya subido al file server, por Anexo. La
+                                 fila necesita conocerlo para ofrecer «ver el
+                                 Anexo» sin depender de que esta misma sesion lo
+                                 haya generado. */
+                              DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
+                              DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
                          FROM cmn.Solicitud AS s
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
@@ -783,6 +845,8 @@ BEGIN
                                         JOIN cmn.Paquete AS pk ON pk.IdPaquete = ps.IdPaquete
                                        WHERE ps.IdSolicitud = s.IdSolicitud
                                          AND ps.Activo = 1 AND pk.Anulado = 0) AS pq
+                         OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
+                         OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
