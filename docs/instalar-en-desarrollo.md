@@ -194,8 +194,13 @@ silencio.
 En `ModoEjecucion` de cada operación se graba lo que **efectivamente** se hizo,
 no lo que se pidió.
 
-Hoy `W001` solo implementa `INCLUIR_ITEM`. `EXCLUIR_ITEM`,
-`MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` devuelven un error explícito.
+Hoy `W001` implementa `INCLUIR_ITEM` y `EXCLUIR_ITEM`. La exclusión llama a
+`usp_ext_excluir_item_cmn`, conserva el original en
+`SIG_CUADRO_MODIFICADO_DET_ORI`, crea la solicitud de modificación en estado
+`2` (V.B. Jefe) con sus cuatro detalles y estado documental, actualiza las
+cuatro filas anuales del cuadro modificado y es idempotente.
+`MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` continúan devolviendo un error
+explícito.
 
 ### 3. El worker .NET
 
@@ -227,7 +232,7 @@ entorno o en un `appsettings.Local.json` excluido de Git; nunca en este manual.
 
 Para habilitar escritura deben configurarse `Habilitado=true` y `Modo=real`.
 En desarrollo sólo se hace después de que el equipo de SIGA instale y autorice
-`usp_ext_registrar_item_cmn`.
+`usp_ext_registrar_item_cmn` y `usp_ext_excluir_item_cmn`.
 
 ### Cómo verificar que llegó
 

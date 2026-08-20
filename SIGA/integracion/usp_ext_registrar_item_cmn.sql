@@ -27,6 +27,17 @@ GO
   codigo=3: @AnoEje + 3
 */
 
+/*
+  El procedimiento usa metodos del tipo XML (@Periodos.nodes). SQL Server exige
+  QUOTED_IDENTIFIER ON en el momento de CREAR el procedimiento: la opcion queda
+  grabada con el objeto. sqlcmd abre la sesion con QUOTED_IDENTIFIER OFF, asi
+  que sin estas dos lineas el procedimiento se crea igual pero falla en
+  ejecucion con el error 1934.
+*/
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
 IF OBJECT_ID('dbo.usp_ext_registrar_item_cmn', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_ext_registrar_item_cmn;
 GO

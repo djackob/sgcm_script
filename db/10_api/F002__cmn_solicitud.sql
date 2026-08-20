@@ -68,6 +68,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -251,7 +252,9 @@ BEGIN
             THROW 51113, @errItem, 1;
         END
 
-        /* La referencia debe existir de verdad en el cuadro vigente de SIGA. */
+        /* La referencia debe existir, seguir activa y no estar alcanzada por
+           otra solicitud. La vista contiene tambien exclusiones historicas;
+           esas filas no son elegibles aunque la clave aun exista. */
         SET @Orden = NULL;
         SELECT TOP 1 @Orden = i.Orden
           FROM #Item AS i
@@ -259,7 +262,10 @@ BEGIN
            AND NOT EXISTS (SELECT 1 FROM siga.vwCuadroVigenteItem AS c
                             WHERE c.AnoEje = @AnoEje AND c.SecEjec = @SecEjec
                               AND c.CentroCosto = @CentroCosto
-                              AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem);
+                              AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem
+                              AND c.FlagModificado = 0 AND c.FlagSolicitud = 0
+                              AND c.MotivoSolicitud = '0' AND c.EstadoSiga IN ('C','I')
+                              AND c.CantAno0 + c.CantAno1 + c.CantAno2 + c.CantAno3 > 0);
         IF @Orden IS NOT NULL
         BEGIN
             SET @errItem = CONCAT('MAESTRO_CUADRO: el item ', @Orden,
@@ -267,8 +273,35 @@ BEGIN
             THROW 51114, @errItem, 1;
         END
 
+        /* En exclusion/modificacion la referencia de SIGA es la autoridad. El
+           navegador no puede cambiar item, clasificacion o precio de la fila
+           elegida y hacer que la cola opere sobre una combinacion inventada. */
+        UPDATE i
+           SET i.TipoTarea     = c.TipoTarea,
+               i.NivelTarea   = c.NivelTarea,
+               i.CodigoTarea  = c.CodigoTarea,
+               i.SecFunc      = c.SecFunc,
+               i.Origen       = c.Origen,
+               i.FuenteFinanc = c.FuenteFinanc,
+               i.Clasificador = c.Clasificador,
+               i.TipoUso      = c.TipoUso,
+               i.TipoBien     = c.TipoBien,
+               i.GrupoBien    = c.GrupoBien,
+               i.ClaseBien    = c.ClaseBien,
+               i.FamiliaBien  = c.FamiliaBien,
+               i.ItemBien     = c.ItemBien,
+               i.PrecioUnitario = c.PrecioUnit
+          FROM #Item AS i
+          JOIN siga.vwCuadroVigenteItem AS c
+            ON c.AnoEje = @AnoEje AND c.SecEjec = @SecEjec
+           AND c.CentroCosto = @CentroCosto
+           AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem
+         WHERE i.TipoMovimiento <> 'INCLUSION';
+
         /* Catalogo. La unidad de medida se toma de SIGA, no de lo que mande el
            cliente: es dato del catalogo y no del formulario. */
+        UPDATE #Item SET UnidadMedida = NULL;
+
         UPDATE i
            SET i.UnidadMedida = c.UnidadMedida
           FROM #Item AS i
@@ -336,6 +369,27 @@ BEGIN
             THROW 51118, @errItem, 1;
         END
 
+        /* Una inclusion solo se guarda si la combinacion presupuestal existe
+           en el techo real de SIGA. Esto evita descubrir el error recien cuando
+           el worker intenta escribir. */
+        SET @Orden = NULL;
+        SELECT TOP 1 @Orden = i.Orden
+          FROM #Item AS i
+         WHERE i.TipoMovimiento = 'INCLUSION'
+           AND NOT EXISTS (SELECT 1
+                             FROM siga.vwTechoPresupuesto AS t
+                            WHERE t.AnoEje = @AnoEje AND t.SecEjec = @SecEjec
+                              AND t.CentroCosto = @CentroCosto AND t.FaseCuadro = 5
+                              AND t.SecFunc = i.SecFunc
+                              AND t.Origen = i.Origen AND t.FuenteFinanc = i.FuenteFinanc
+                              AND t.Clasificador = i.Clasificador);
+        IF @Orden IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT('MAESTRO_TECHO: el item ', @Orden,
+                ' no tiene una combinacion valida de tarea, meta, fuente y clasificador en SIGA.');
+            THROW 51121, @errItem, 1;
+        END
+
         /* ---- Periodos a tabla temporal -------------------------------- */
         CREATE TABLE #Periodo (
             Orden     int NOT NULL,
@@ -386,7 +440,7 @@ BEGIN
         DECLARE @IdExpediente uniqueidentifier;
         DECLARE @IdSolicitud  uniqueidentifier;
 
-        BEGIN TRANSACTION;
+        BEGIN TRANSACTION; SET @TranPropia = 1;
 
         INSERT INTO sigcm.Expediente
             (Codigo, CodigoModulo, AnoEje, IdUnidadOrigen, CodigoEstado,
@@ -457,7 +511,7 @@ BEGIN
              (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
              @Cuenta, @Equipo, @Programa);
 
-        COMMIT TRANSACTION;
+        COMMIT TRANSACTION; SET @TranPropia = 0;
 
         DECLARE @Items int = (SELECT COUNT(*) FROM #Item);
 
@@ -484,7 +538,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado,
                    ERROR_MESSAGE() AS mensaje,
@@ -513,6 +575,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -579,7 +642,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
@@ -612,6 +683,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -690,10 +762,27 @@ BEGIN
                                               JOIN cmn.SolicitudItemPeriodo AS p
                                                 ON p.IdSolicitudItem = it.IdSolicitudItem
                                              WHERE it.IdSolicitud = s.IdSolicitud),
+                              /* Area usuaria de origen: en la bandeja de
+                                 Abastecimiento conviven expedientes de varias, y
+                                 sin esto la fila no dice de quien es. */
+                              AreaUsuaria = uo.Nombre,
+                              SiglaArea   = uo.Sigla,
+                              /* El Anexo 4 que agrupa esta solicitud, si ya lo
+                                 hay. La pantalla lo usa para agrupar las filas
+                                 de un mismo paquete y para no volver a ofrecer
+                                 en la seleccion algo ya tomado. */
+                              pq.IdPaquete,
+                              CodigoAnexo4 = pq.Codigo,
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
                          FROM cmn.Solicitud AS s
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
+                         JOIN sigcm.Unidad     AS uo ON uo.IdUnidad = e.IdUnidadOrigen
+                         OUTER APPLY (SELECT TOP 1 pk.IdPaquete, pk.Codigo
+                                        FROM cmn.PaqueteSolicitud AS ps
+                                        JOIN cmn.Paquete AS pk ON pk.IdPaquete = ps.IdPaquete
+                                       WHERE ps.IdSolicitud = s.IdSolicitud
+                                         AND ps.Activo = 1 AND pk.Anulado = 0) AS pq
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
@@ -711,7 +800,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
                    JSON_QUERY('[]') AS Solicitudes

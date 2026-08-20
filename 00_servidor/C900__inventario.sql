@@ -71,8 +71,16 @@ INSERT INTO @inventario (tipo, cantidad, esperado) VALUES
     (N'Vistas',         (SELECT COUNT(*) FROM sys.views WHERE is_ms_shipped = 0),  NULL),
     (N'Procedimientos', (SELECT COUNT(*) FROM sys.procedures WHERE is_ms_shipped = 0), NULL),
     (N'Funciones',      (SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN','IF','TF') AND is_ms_shipped = 0), NULL),
-    (N'Sinonimos maestros', (SELECT COUNT(*) FROM sys.synonyms
-                              WHERE name <> N'usp_ext_registrar_item_cmn'), 14),
+    /* Solo las TABLAS de SIGA tienen cuenta fija. Los sinonimos hacia
+       procedimientos (usp_ext_*) los crea W001 uno por operacion soportada, y
+       su numero crece cada vez que SIGA homologa un procedimiento nuevo: fijarlo
+       aqui obliga a corregir el inventario en cada incorporacion y hace fallar
+       la instalacion por un motivo que no es un problema. Cuales existen y a
+       donde apuntan se sigue listando abajo, que es lo que de verdad importa. */
+    (N'Sinonimos tablas SIGA', (SELECT COUNT(*) FROM sys.synonyms
+                                   WHERE name NOT LIKE N'usp[_]%'), 14),
+    (N'Sinonimos proc. SIGA', (SELECT COUNT(*) FROM sys.synonyms
+                                           WHERE name LIKE N'usp[_]%'), NULL),
     (N'Secuencias',     (SELECT COUNT(*) FROM sys.sequences), NULL),
     (N'Esquemas SIGCM', (SELECT COUNT(*) FROM sys.schemas
                           WHERE name IN (N'sigcm', N'integracion', N'siga', N'cmn',

@@ -28,24 +28,42 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 11 | `db/00_ddl/V007__modulo_ruta.sql` | DBSIGCM | Ruta e icono por módulo, para el menú |
 | 12 | `db/00_ddl/V008__documento_archivo.sql` | DBSIGCM | Columnas de archivo del documento |
 | 13 | `db/00_ddl/V009__requerimiento_registro.sql` | DBSIGCM | Módulo Requerimiento, núcleo |
+| 13b | `db/00_ddl/V010__correlativo.sql` | DBSIGCM | Correlativos del código de expediente |
+| 13c | `db/00_ddl/V011__cmn_paquete_anexo4.sql` | DBSIGCM | Anexo 4 múltiple y firma en cadena |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
 | 17 | `db/10_api/F004__transicion_encolado.sql` | DBSIGCM | Motor de estados y trazabilidad |
 | 18 | `db/10_api/F005__requerimiento.sql` | DBSIGCM | Requerimiento: registrar, obtener, listar |
 | 19 | `db/10_api/F006__acceso_sesion.sql` | DBSIGCM | Acceso y armado de la sesión |
-| 20 | `db/15_siga/W001__escritor_cuadro_modificado.sql` | DBSIGCM | Escritor SIGA (solo simulación) |
+| 19b | `db/10_api/F007__cmn_anexo4.sql` | DBSIGCM | Anexo 4: generar, obtener, anular |
+| 20 | `db/15_siga/W001__escritor_cuadro_modificado.sql` | DBSIGCM | Escritor SIGA |
 | 21 | `db/20_seed/S000__numeros.sql` | DBSIGCM | Tabla de números |
 | 22 | `db/20_seed/S001__roles_estados_transiciones.sql` | DBSIGCM | Configuración de CMN |
 | 23 | `db/20_seed/S002__plazos_directiva.sql` | DBSIGCM | Plazos de la Directiva |
 | 24 | `db/20_seed/S003__requerimiento_estados.sql` | DBSIGCM | Configuración de Requerimiento |
 
-Pendiente de escribir: `V010`/`S004` — indagación de mercado, cuadro de
-cotizaciones (Anexo 8), CCP y orden.
+Pendiente de escribir: `S004` — indagación de mercado, cuadro de cotizaciones
+(Anexo 8), CCP y orden.
 
-`db/15_siga/W001__escritor_cuadro_modificado.sql` (paso 20) **todavía no
-existe**; el instalador salta ese bloque sin error mientras la carpeta esté
-vacía.
+El instalador descubre los scripts por patrón (`V*`, `F*`, `W*`, `S*`) y los
+aplica ordenados por nombre, así que agregar uno nuevo no obliga a tocar
+`instalar.ps1`; sí conviene anotarlo en esta tabla.
+
+### Pruebas
+
+| Script | Qué prueba | Escribe en SIGA | Deja rastro |
+|---|---|---|---|
+| `S900__datos_prueba.sql` | Usuarios y unidades ficticios | no | sí, es la semilla |
+| `S901__prueba_e2e_cmn_siga.sql` | Flujo completo contra SIGA, los dos momentos de escritura | **sí** | sí, a propósito |
+| `S902__continuar_anexo4.sql` | Continúa un expediente detenido en `CMN_A3_APROBADO` | **sí** | sí |
+| `S903__prueba_anexo4_multiple.sql` | Anexo 4 que agrupa Anexos 3 de **dos áreas usuarias** | no | no, se limpia sola |
+| `S904__casos_anexo4_multiple.sql` | Deja 4 Anexos 3 en borrador, uno por área usuaria real, para recorrer el flujo a mano desde la pantalla | no | sí, esa es la idea |
+
+`S903` es la que conviene correr después de tocar el flujo: no toca SIGA, se
+limpia al terminar y es repetible. Comprueba la firma en cadena, la regla del
+viernes, que un Anexo 3 no entre en dos Anexos 4, el registro múltiple de
+aprobaciones y que cada expediente vuelva a su propia área usuaria.
 
 ### Scripts fuera de la serie
 

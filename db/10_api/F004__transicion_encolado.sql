@@ -29,13 +29,34 @@
   accion se aplico.
 
   ---------------------------------------------------------------------------
+  UNA TRANSICION SOBRE VARIOS EXPEDIENTES A LA VEZ
+  ---------------------------------------------------------------------------
+  El Anexo 4 agrupa varios Anexos 3 de areas usuarias distintas, y cada Anexo 3
+  es un expediente. Cuando el coordinador firma ese Anexo 4, los N expedientes
+  tienen que avanzar juntos.
+
+  Por eso la rutina acepta IdExpedientes ademas de IdExpediente, y los mueve
+  TODOS EN LA MISMA TRANSACCION. No es una comodidad de la pantalla: un Anexo 4
+  con tres expedientes movidos y dos sin mover no corresponde a ningun estado
+  del tramite, y no habria forma de repararlo desde la interfaz, porque la
+  accion que quedo a medias ya no esta disponible para los que si avanzaron.
+
+  La firma del jefe encola una operacion hacia SIGA POR EXPEDIENTE. Un Anexo 4
+  con cinco Anexos 3 produce cinco aprobaciones en SIGA, una por area usuaria:
+  es el registro multiple de aprobaciones que pide el flujo.
+
+  ---------------------------------------------------------------------------
   ENTRADA
   ---------------------------------------------------------------------------
   {
     "Actor": { ... },
-    "IdExpediente": "...",
-    "CodigoTransicion": "CMN_VALIDAR_UA",
-    "Version": 3,
+    "IdExpediente": "...",          uno solo
+    "Version": 3,                   su version, para el control de concurrencia
+    "IdExpedientes": [              o varios, cada uno con la suya
+        { "IdExpediente": "...", "Version": 3 },
+        { "IdExpediente": "...", "Version": 7 }
+    ],
+    "CodigoTransicion": "CMN_ABAST_COORD_FIRMAR_A4",
     "Comentario": "...",
     "IdUnidadDestino": null,        // opcional; ver seccion de enrutamiento
     "Datos": { }                    // opcional, se guarda en el historial
@@ -63,6 +84,7 @@ BEGIN
     SET XACT_ABORT ON;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -120,7 +142,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
                    JSON_QUERY('[]') AS Transiciones
@@ -144,6 +174,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -186,31 +217,98 @@ BEGIN
             Datos            nvarchar(max) AS JSON
         );
 
-        IF @IdExpediente IS NULL
-            THROW 51211, 'VALIDACION_PAYLOAD: falta IdExpediente o no es un identificador valido.', 1;
         IF NULLIF(LTRIM(RTRIM(@CodigoTransicion)), '') IS NULL
             THROW 51212, 'VALIDACION_PAYLOAD: falta CodigoTransicion.', 1;
 
-        /* ---- Expediente ----------------------------------------------- */
+        /* ---- El lote de expedientes que se mueve ---------------------- */
+        /*
+          IdExpedientes admite dos formas para no obligar al llamador a cambiar
+          de estructura cuando pasa de uno a varios:
+            ["guid", "guid"]                        sin control de concurrencia
+            [{"IdExpediente":"guid","Version":3}]   con el
+          El tipo 5 de OPENJSON es "objeto"; cualquier otro se lee como escalar.
+        */
+        DECLARE @Lote TABLE (
+            IdExpediente   uniqueidentifier PRIMARY KEY,
+            VersionCliente int NULL,
+            Orden          int IDENTITY(1,1)
+        );
+
+        INSERT INTO @Lote (IdExpediente, VersionCliente)
+        SELECT DISTINCT
+               CASE WHEN j.type = 5
+                    THEN TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdExpediente'))
+                    ELSE TRY_CONVERT(uniqueidentifier, j.value) END,
+               CASE WHEN j.type = 5
+                    THEN TRY_CONVERT(int, JSON_VALUE(j.value, '$.Version')) END
+          FROM OPENJSON(@parametro, '$.IdExpedientes') AS j
+         WHERE CASE WHEN j.type = 5
+                    THEN TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdExpediente'))
+                    ELSE TRY_CONVERT(uniqueidentifier, j.value) END IS NOT NULL;
+
+        IF @IdExpediente IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM @Lote WHERE IdExpediente = @IdExpediente)
+            INSERT INTO @Lote (IdExpediente, VersionCliente) VALUES (@IdExpediente, @VersionCliente);
+
+        IF NOT EXISTS (SELECT 1 FROM @Lote)
+            THROW 51211, 'VALIDACION_PAYLOAD: falta IdExpediente o IdExpedientes.', 1;
+
+        DECLARE @CantidadLote int = (SELECT COUNT(*) FROM @Lote);
+
+        /* ---- Expediente de referencia --------------------------------- */
+        /*
+          La transicion se resuelve una sola vez, contra el estado del lote. Que
+          el estado sea el mismo para todos no es un supuesto: se comprueba
+          abajo. Si no lo fuera, una misma accion significaria cosas distintas
+          para cada expediente y no habria una transicion que ejecutar.
+        */
         DECLARE @EstadoActual varchar(60), @CodigoModulo varchar(30),
                 @VersionActual int, @CodigoExpediente varchar(40);
 
-        SELECT @EstadoActual     = CodigoEstado,
-               @CodigoModulo     = CodigoModulo,
-               @VersionActual    = Version,
-               @CodigoExpediente = Codigo
-          FROM sigcm.Expediente
-         WHERE IdExpediente = @IdExpediente AND Anulado = 0 AND Activo = 1;
+        SELECT TOP 1 @EstadoActual     = e.CodigoEstado,
+                     @CodigoModulo     = e.CodigoModulo,
+                     @VersionActual    = e.Version,
+                     @CodigoExpediente = e.Codigo,
+                     @IdExpediente     = e.IdExpediente
+          FROM sigcm.Expediente AS e
+          JOIN @Lote AS l ON l.IdExpediente = e.IdExpediente
+         WHERE e.Anulado = 0 AND e.Activo = 1
+         ORDER BY l.Orden;
 
         IF @EstadoActual IS NULL
             THROW 51213, 'NO_ENCONTRADO: el expediente no existe o esta anulado.', 1;
 
-        IF @VersionCliente IS NOT NULL AND @VersionCliente <> @VersionActual
+        IF EXISTS (SELECT 1 FROM @Lote AS l
+                    WHERE NOT EXISTS (SELECT 1 FROM sigcm.Expediente AS e
+                                       WHERE e.IdExpediente = l.IdExpediente
+                                         AND e.Anulado = 0 AND e.Activo = 1))
+            THROW 51222, 'NO_ENCONTRADO: algun expediente del lote no existe o esta anulado.', 1;
+
+        IF EXISTS (SELECT 1 FROM sigcm.Expediente AS e
+                     JOIN @Lote AS l ON l.IdExpediente = e.IdExpediente
+                    WHERE e.CodigoEstado <> @EstadoActual OR e.CodigoModulo <> @CodigoModulo)
+        BEGIN
+            DECLARE @errLote nvarchar(500) = CONCAT(
+                'CONFLICTO_LOTE: los expedientes seleccionados no estan todos en el estado ',
+                @EstadoActual, '. Vuelva a cargar la bandeja: alguno se movio mientras tanto.');
+            THROW 51223, @errLote, 1;
+        END
+
+        /* Concurrencia optimista, expediente por expediente. Se comprueba antes
+           de abrir la transaccion para responder el conflicto sin haber tocado
+           nada, y se vuelve a comprobar en el UPDATE, que es donde realmente
+           cierra la ventana. */
+        DECLARE @ExpDesfasado varchar(40) =
+            (SELECT TOP 1 e.Codigo
+               FROM sigcm.Expediente AS e
+               JOIN @Lote AS l ON l.IdExpediente = e.IdExpediente
+              WHERE l.VersionCliente IS NOT NULL AND l.VersionCliente <> e.Version);
+
+        IF @ExpDesfasado IS NOT NULL
         BEGIN
             DECLARE @errVer nvarchar(400) = CONCAT(
-                'CONFLICTO_VERSION: el expediente va por la version ', @VersionActual,
-                ' y usted trabajo sobre la ', @VersionCliente,
-                '. Vuelva a cargarlo: otra persona lo movio mientras tanto.');
+                'CONFLICTO_VERSION: el expediente ', @ExpDesfasado,
+                ' cambio mientras usted trabajaba. Vuelva a cargarlo: otra persona lo movio.');
             THROW 51214, @errVer, 1;
         END
 
@@ -218,7 +316,8 @@ BEGIN
         DECLARE @EstadoDestino varchar(60), @NombreAccion varchar(180),
                 @RequiereComentario bit, @RequiereFirma bit,
                 @DocumentoRequerido varchar(60), @EncolaIntegracion bit,
-                @OperacionIntegracion varchar(30), @GeneraObservacion bit;
+                @OperacionIntegracion varchar(30), @GeneraObservacion bit,
+                @RolFirmaRequerida varchar(40);
 
         SELECT @EstadoDestino        = CodigoEstadoDestino,
                @NombreAccion         = NombreAccion,
@@ -227,7 +326,8 @@ BEGIN
                @DocumentoRequerido   = DocumentoRequerido,
                @EncolaIntegracion    = EncolaIntegracion,
                @OperacionIntegracion = OperacionIntegracion,
-               @GeneraObservacion    = GeneraObservacion
+               @GeneraObservacion    = GeneraObservacion,
+               @RolFirmaRequerida    = RolFirmaRequerida
           FROM sigcm.Transicion
          WHERE CodigoTransicion   = @CodigoTransicion
            AND CodigoModulo       = @CodigoModulo
@@ -258,43 +358,84 @@ BEGIN
             THROW 51217, @errCom, 1;
         END
 
-        /* El documento debe existir, estar vigente y FIRMADO. Que exista un
-           borrador no basta: es justamente lo que la firma pretende impedir. */
+        /*
+          El documento debe existir en su version vigente y traer la firma que
+          respalda ESTE paso. Que exista un borrador no basta: es justamente lo
+          que la firma pretende impedir.
+
+          RolFirmaRequerida (V011) precisa cual firma:
+            NULL  -> la version tiene que estar FIRMADO, es decir con todas las
+                     firmas declaradas. Es lo que exige la recepcion del Anexo 4.
+            <rol> -> alcanza con la firma vigente de ese rol. Es lo que exige
+                     cada escalon de la cadena, porque a esa altura el documento
+                     todavia tiene firmas pendientes por diseno.
+
+          Se comprueba expediente por expediente: en un Anexo 4 consolidado el
+          documento es uno solo y esta enlazado a todos, pero el enlace podria
+          faltar para alguno y ese es exactamente el caso que hay que detener.
+        */
         IF @DocumentoRequerido IS NOT NULL
         BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                  FROM sigcm.DocumentoExpediente AS de
-                  JOIN sigcm.Documento           AS d  ON d.IdDocumento = de.IdDocumento
-                  JOIN sigcm.DocumentoVersion    AS dv ON dv.IdDocumento = d.IdDocumento
-                                                      AND dv.Version = d.VersionVigente
-                 WHERE de.IdExpediente = @IdExpediente
-                   AND d.CodigoTipoDocumento = @DocumentoRequerido
-                   AND d.Anulado = 0 AND d.Activo = 1
-                   AND dv.Estado = 'FIRMADO')
+            DECLARE @ExpSinDoc varchar(40) =
+                (SELECT TOP 1 e.Codigo
+                   FROM sigcm.Expediente AS e
+                   JOIN @Lote AS l ON l.IdExpediente = e.IdExpediente
+                  WHERE NOT EXISTS (
+                        SELECT 1
+                          FROM sigcm.DocumentoExpediente AS de
+                          JOIN sigcm.Documento        AS d  ON d.IdDocumento = de.IdDocumento
+                          JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                           AND dv.Version = d.VersionVigente
+                         WHERE de.IdExpediente = e.IdExpediente
+                           AND d.CodigoTipoDocumento = @DocumentoRequerido
+                           AND d.Anulado = 0 AND d.Activo = 1
+                           AND (
+                                (@RolFirmaRequerida IS NULL AND dv.Estado = 'FIRMADO')
+                             OR (@RolFirmaRequerida IS NOT NULL
+                                 AND dv.Estado IN ('PARCIAL','FIRMADO')
+                                 AND EXISTS (SELECT 1 FROM sigcm.Firma AS f
+                                              WHERE f.IdDocumentoVersion = dv.IdDocumentoVersion
+                                                AND f.CodigoRol = @RolFirmaRequerida
+                                                AND f.Estado = 'FIRMADA'))
+                           )));
+
+            IF @ExpSinDoc IS NOT NULL
             BEGIN
-                DECLARE @errDoc nvarchar(500) = CONCAT(
+                DECLARE @errDoc nvarchar(600) = CONCAT(
                     'CONFLICTO_DOCUMENTO: "', @NombreAccion, '" exige el documento ',
-                    @DocumentoRequerido, ' en su version vigente y firmado.');
+                    @DocumentoRequerido,
+                    CASE WHEN @RolFirmaRequerida IS NULL
+                         THEN ' firmado por todos sus firmantes'
+                         ELSE CONCAT(' con la firma vigente de ', @RolFirmaRequerida) END,
+                    ', y el expediente ', @ExpSinDoc, ' no lo tiene asi.');
                 THROW 51218, @errDoc, 1;
             END
         END
 
-        /* ---- Enrutamiento: a que unidad y a quien queda ---------------- */
+        /* ---- Enrutamiento: a que unidad queda cada expediente ---------- */
         /*
-          El estado destino declara el ROL responsable. La UNIDAD no se puede
-          deducir del rol en general: dos areas usuarias distintas tienen ambas un
-          AREA_JEFE. Por eso:
+          El estado destino declara el ROL responsable. La UNIDAD no se deduce del
+          rol: dos areas usuarias distintas tienen ambas un AREA_JEFE. El orden de
+          resolucion, por expediente, es:
 
             1. Si el cliente manda IdUnidadDestino, manda eso.
-            2. Si no, y exactamente una unidad tiene asignado hoy ese rol, se usa
-               esa. Es el caso de OA y Abastecimiento, que son unicas.
-            3. Si no, se conserva la unidad actual. Es el caso de las
-               transiciones internas del area usuaria (especialista -> jefe).
+            2. Si la UNIDAD DE ORIGEN del expediente tiene a alguien con el rol
+               destino, va ahi. Es lo que devuelve cada expediente a SU area
+               usuaria, y es imprescindible desde que el Anexo 4 cubre varias:
+               al remitirlo, cada Anexo 3 tiene que volver a la oficina que lo
+               pidio, no a una sola para todos.
+            3. Si exactamente una unidad tiene ese rol, se usa esa. Es el caso de
+               OA y de Abastecimiento, que son unicas en la entidad.
+            4. Si no, se conserva la unidad actual.
+
+          La regla 2 va antes que la 3 y no al reves: cuando el rol destino es
+          unico en la entidad —OA, Abastecimiento— ninguna area usuaria lo tiene
+          asignado, asi que la regla 2 no se activa y la 3 decide igual que antes.
         */
-        DECLARE @RolDestino varchar(40), @IdUnidadActualExp uniqueidentifier;
+        DECLARE @RolDestino varchar(40);
         SELECT @RolDestino = RolResponsable FROM sigcm.Estado WHERE CodigoEstado = @EstadoDestino;
-        SELECT @IdUnidadActualExp = IdUnidadActual FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente;
+
+        DECLARE @UnidadUnicaRol uniqueidentifier = NULL;
 
         IF @IdUnidadDestino IS NULL AND @RolDestino IS NOT NULL
         BEGIN
@@ -305,90 +446,175 @@ BEGIN
                AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
 
             IF @Candidatas = 1
-                SELECT @IdUnidadDestino = MIN(ur.IdUnidad)
+                SELECT @UnidadUnicaRol = MIN(ur.IdUnidad)
                   FROM sigcm.UsuarioRol AS ur
                  WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
         END
 
-        SET @IdUnidadDestino = ISNULL(@IdUnidadDestino, @IdUnidadActualExp);
-
-        /* El responsable concreto se deja sin fijar: la bandeja se resuelve por
-           rol y unidad, y asignar a una persona en una unidad con varios titulares
-           seria inventar una regla que la Directiva no establece. */
-        DECLARE @IdResponsable uniqueidentifier = NULL;
-
         /* ---- Escritura ------------------------------------------------ */
         DECLARE @Ahora datetime = GETDATE();
-        DECLARE @VersionNueva int = @VersionActual + 1;
         DECLARE @Encoladas int = 0;
         DECLARE @IdObservacion uniqueidentifier = NULL;
+        DECLARE @EsFinalDestino bit =
+            CASE WHEN EXISTS (SELECT 1 FROM sigcm.Estado
+                               WHERE CodigoEstado = @EstadoDestino AND EsFinal = 1)
+                 THEN 1 ELSE 0 END;
 
-        BEGIN TRANSACTION;
+        BEGIN TRANSACTION; SET @TranPropia = 1;
 
-        /* La condicion sobre Version es el candado de concurrencia optimista:
-           si otro proceso avanzo el expediente entre la lectura y este UPDATE,
-           no se afecta ninguna fila. */
-        UPDATE sigcm.Expediente
-           SET CodigoEstado                  = @EstadoDestino,
-               Version                       = @VersionNueva,
-               IdUnidadActual                = @IdUnidadDestino,
-               IdResponsableActual           = @IdResponsable,
-               CerradoEn                     = CASE WHEN EXISTS (SELECT 1 FROM sigcm.Estado
-                                                                  WHERE CodigoEstado = @EstadoDestino
-                                                                    AND EsFinal = 1)
-                                                    THEN @Ahora ELSE CerradoEn END,
-               UsuarioModificacionAuditoria  = @Cuenta,
-               FechaModificacionAuditoria    = @Ahora,
-               EquipoModificacionAuditoria   = @Equipo,
-               ProgramaModificacionAuditoria = @Programa
-         WHERE IdExpediente = @IdExpediente
-           AND Version      = @VersionActual;
-
-        IF @@ROWCOUNT = 0
-            THROW 51219, 'CONFLICTO_VERSION: otra persona movio el expediente en este instante. Vuelva a cargarlo.', 1;
-
-        INSERT INTO sigcm.Historial
-            (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
-             Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
-             UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@IdExpediente, @EstadoActual, @EstadoDestino, @CodigoTransicion,
-             @Comentario, @IdUsuario, @CodigoRol, @IdUnidad,
-             CASE WHEN ISJSON(@Datos) = 1 THEN @Datos ELSE N'{}' END,
-             @Cuenta, @Equipo, @Programa);
-
-        /* ---- Observacion ---------------------------------------------- */
         /*
-          CodigoEstadoRetorno se toma del estado en que ESTABA el expediente al
-          observarse. Ahi vive la regla del mockup: lo que observa OA vuelve a OA,
-          lo que observa Abastecimiento vuelve a Abastecimiento. Es dato, no un
-          condicional por unidad.
+          El recorrido es expediente por expediente y todo dentro de UNA
+          transaccion. Con un solo expediente se comporta exactamente como antes;
+          con varios, o avanzan todos o no avanza ninguno.
+
+          No se resuelve con un UPDATE de conjunto porque cada expediente tiene su
+          propia version que verificar, su propia unidad de destino y su propia
+          fila de historial, y porque el encolado de integracion necesita saber a
+          que expediente pertenece cada operacion.
         */
-        IF @GeneraObservacion = 1
+        DECLARE @Idx int = 1, @IdExpLoop uniqueidentifier,
+                @VersionExp int, @VersionNuevaExp int,
+                @UnidadOrigenExp uniqueidentifier, @UnidadActualExp uniqueidentifier,
+                @IdUnidadDestinoExp uniqueidentifier, @CodigoExpLoop varchar(40),
+                @VersionNueva int = @VersionActual + 1;
+
+        WHILE @Idx <= @CantidadLote
         BEGIN
-            IF EXISTS (SELECT 1 FROM sigcm.Observacion
-                        WHERE IdExpediente = @IdExpediente
-                          AND Estado IN ('PENDIENTE','RECEPCIONADA') AND Activo = 1)
-                THROW 51220, 'CONFLICTO_OBSERVACION: el expediente ya tiene una observacion abierta.', 1;
+            SELECT @IdExpLoop = l.IdExpediente FROM @Lote AS l WHERE l.Orden = @Idx;
 
-            DECLARE @UnidadOrigenExp uniqueidentifier;
-            SELECT @UnidadOrigenExp = IdUnidadOrigen FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente;
+            SELECT @VersionExp     = e.Version,
+                   @UnidadOrigenExp = e.IdUnidadOrigen,
+                   @UnidadActualExp = e.IdUnidadActual,
+                   @CodigoExpLoop  = e.Codigo
+              FROM sigcm.Expediente AS e
+             WHERE e.IdExpediente = @IdExpLoop;
 
-            DECLARE @Obs TABLE (IdObservacion uniqueidentifier);
+            SET @VersionNuevaExp = @VersionExp + 1;
 
-            INSERT INTO sigcm.Observacion
-                (IdExpediente, IdUnidadOrigen, CodigoRolOrigen, IdUnidadDestino,
-                 CodigoEstadoRetorno, Motivo, Estado,
-                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-            OUTPUT inserted.IdObservacion INTO @Obs
+            /* Regla 2 del enrutamiento, evaluada con la unidad de ESTE expediente. */
+            SET @IdUnidadDestinoExp = @IdUnidadDestino;
+
+            IF @IdUnidadDestinoExp IS NULL AND @RolDestino IS NOT NULL
+               AND EXISTS (SELECT 1 FROM sigcm.UsuarioRol AS ur
+                            WHERE ur.CodigoRol = @RolDestino
+                              AND ur.IdUnidad = @UnidadOrigenExp
+                              AND ur.Activo = 1
+                              AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE())))
+                SET @IdUnidadDestinoExp = @UnidadOrigenExp;
+
+            SET @IdUnidadDestinoExp = COALESCE(@IdUnidadDestinoExp, @UnidadUnicaRol, @UnidadActualExp);
+
+            /* La condicion sobre Version es el candado de concurrencia optimista:
+               si otro proceso avanzo el expediente entre la lectura y este UPDATE,
+               no se afecta ninguna fila. */
+            UPDATE sigcm.Expediente
+               SET CodigoEstado                  = @EstadoDestino,
+                   Version                       = @VersionNuevaExp,
+                   IdUnidadActual                = @IdUnidadDestinoExp,
+                   /* El responsable concreto se deja sin fijar: la bandeja se
+                      resuelve por rol y unidad, y asignar a una persona en una
+                      unidad con varios titulares seria inventar una regla que la
+                      Directiva no establece. */
+                   IdResponsableActual           = NULL,
+                   CerradoEn                     = CASE WHEN @EsFinalDestino = 1
+                                                        THEN @Ahora ELSE CerradoEn END,
+                   UsuarioModificacionAuditoria  = @Cuenta,
+                   FechaModificacionAuditoria    = @Ahora,
+                   EquipoModificacionAuditoria   = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdExpediente = @IdExpLoop
+               AND Version      = @VersionExp;
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+                DECLARE @errCarrera nvarchar(400) = CONCAT(
+                    'CONFLICTO_VERSION: otra persona movio el expediente ', @CodigoExpLoop,
+                    ' en este instante. Vuelva a cargarlo.');
+                THROW 51219, @errCarrera, 1;
+            END
+
+            INSERT INTO sigcm.Historial
+                (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
+                 Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
+                 UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
             VALUES
-                (@IdExpediente, @IdUnidad, @CodigoRol, @UnidadOrigenExp,
-                 @EstadoActual, @Comentario, 'PENDIENTE',
-                 @Cuenta, @Ahora, @Equipo, @Programa);
+                (@IdExpLoop, @EstadoActual, @EstadoDestino, @CodigoTransicion,
+                 @Comentario, @IdUsuario, @CodigoRol, @IdUnidad,
+                 CASE WHEN ISJSON(@Datos) = 1 THEN @Datos ELSE N'{}' END,
+                 @Cuenta, @Equipo, @Programa);
 
-            SELECT @IdObservacion = IdObservacion FROM @Obs;
+            /* ---- Observacion ------------------------------------------ */
+            /*
+              CodigoEstadoRetorno se toma del estado en que ESTABA el expediente
+              al observarse. Ahi vive la regla del mockup: lo que observa OA
+              vuelve a OA, lo que observa Abastecimiento vuelve a Abastecimiento.
+              Es dato, no un condicional por unidad.
+            */
+            IF @GeneraObservacion = 1
+            BEGIN
+                IF EXISTS (SELECT 1 FROM sigcm.Observacion
+                            WHERE IdExpediente = @IdExpLoop
+                              AND Estado IN ('PENDIENTE','RECEPCIONADA') AND Activo = 1)
+                BEGIN
+                    DECLARE @errObs nvarchar(400) = CONCAT(
+                        'CONFLICTO_OBSERVACION: el expediente ', @CodigoExpLoop,
+                        ' ya tiene una observacion abierta.');
+                    THROW 51220, @errObs, 1;
+                END
+
+                DECLARE @Obs TABLE (IdObservacion uniqueidentifier);
+                DELETE FROM @Obs;
+
+                INSERT INTO sigcm.Observacion
+                    (IdExpediente, IdUnidadOrigen, CodigoRolOrigen, IdUnidadDestino,
+                     CodigoEstadoRetorno, Motivo, Estado,
+                     UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                     EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+                OUTPUT inserted.IdObservacion INTO @Obs
+                VALUES
+                    (@IdExpLoop, @IdUnidad, @CodigoRol, @UnidadOrigenExp,
+                     @EstadoActual, @Comentario, 'PENDIENTE',
+                     @Cuenta, @Ahora, @Equipo, @Programa);
+
+                SELECT @IdObservacion = IdObservacion FROM @Obs;
+            END
+
+            SET @Idx = @Idx + 1;
+        END
+
+        /* A partir de aqui el encolado trabaja sobre todo el lote de una vez. */
+        SET @IdExpediente = (SELECT TOP 1 IdExpediente FROM @Lote ORDER BY Orden);
+
+        /* ---- Dato del modulo que la accion trae consigo ---------------- */
+        /*
+          TipoInclusion es la decision del paso 6 del flujo: al conformar el
+          Anexo 3, el especialista de Abastecimiento declara si la modificacion
+          es ordinaria o urgente. De esa marca depende despues la regla del
+          viernes al generar el Anexo 4.
+
+          Viaja en el mismo POST que la transicion y no en una rutina aparte
+          porque es parte de la misma decision: no existe conformar sin decidir
+          el tipo. La columna es de cmn.Solicitud desde V005 y hasta ahora
+          ninguna rutina la escribia; el frontend ya la mandaba y se perdia.
+        */
+        DECLARE @TipoInclusion varchar(15) =
+            NULLIF(LTRIM(RTRIM(JSON_VALUE(@parametro, '$.TipoInclusion'))), '');
+
+        IF @TipoInclusion IS NOT NULL
+        BEGIN
+            IF @TipoInclusion NOT IN ('ORDINARIA','URGENTE')
+                THROW 51224, 'VALIDACION_PAYLOAD: TipoInclusion debe ser ORDINARIA o URGENTE.', 1;
+
+            UPDATE s
+               SET s.TipoInclusion = @TipoInclusion,
+                   s.UsuarioModificacionAuditoria = @Cuenta,
+                   s.FechaModificacionAuditoria   = @Ahora,
+                   s.EquipoModificacionAuditoria  = @Equipo,
+                   s.ProgramaModificacionAuditoria = @Programa
+              FROM cmn.Solicitud AS s
+              JOIN @Lote AS l ON l.IdExpediente = s.IdExpediente
+             WHERE s.Activo = 1;
         END
 
         /* ---- Encolado hacia SIGA -------------------------------------- */
@@ -416,12 +642,12 @@ BEGIN
                 SELECT
                     CONCAT(CONVERT(varchar(36), s.IdSolicitud), ':',
                            CONVERT(varchar(36), i.IdSolicitudItem), ':',
-                           CONVERT(varchar(10), @VersionNueva), ':',
+                           CONVERT(varchar(10), e.Version), ':',
                            CASE i.TipoMovimiento
                                 WHEN 'INCLUSION'    THEN 'INCLUIR_ITEM'
                                 WHEN 'EXCLUSION'    THEN 'EXCLUIR_ITEM'
                                 ELSE 'MODIFICAR_CANTIDADES' END),
-                    @IdExpediente, s.IdSolicitud, i.IdSolicitudItem,
+                    e.IdExpediente, s.IdSolicitud, i.IdSolicitudItem,
                     CASE i.TipoMovimiento
                          WHEN 'INCLUSION' THEN 'INCLUIR_ITEM'
                          WHEN 'EXCLUSION' THEN 'EXCLUIR_ITEM'
@@ -430,6 +656,7 @@ BEGIN
                     i.Orden,
                     'PENDIENTE',
                     (SELECT s.AnoEje, s.SecEjec, s.CentroCosto,
+                            Comentario = @Comentario,
                             i.TipoMovimiento, i.RefSecCuadro, i.RefSecItem,
                             i.TipoTarea, i.NivelTarea, i.CodigoTarea, i.SecFunc, i.SecFuncProp,
                             i.Origen, i.FuenteFinanc, i.Clasificador, i.TipoRecurso,
@@ -444,17 +671,21 @@ BEGIN
                                    FOR JSON PATH))
                        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
                     @Cuenta, @Ahora, @Equipo, @Programa
-                  FROM cmn.Solicitud     AS s
-                  JOIN cmn.SolicitudItem AS i ON i.IdSolicitud = s.IdSolicitud AND i.Activo = 1
-                 WHERE s.IdExpediente = @IdExpediente AND s.Activo = 1;
+                  FROM @Lote             AS l
+                  JOIN sigcm.Expediente  AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN cmn.Solicitud     AS s ON s.IdExpediente = e.IdExpediente AND s.Activo = 1
+                  JOIN cmn.SolicitudItem AS i ON i.IdSolicitud = s.IdSolicitud AND i.Activo = 1;
 
                 SET @Encoladas = @@ROWCOUNT;
             END
             ELSE IF @OperacionIntegracion = 'CONSOLIDAR_CMN'
             BEGIN
-                /* Anexo 4 firmado: una sola operacion por solicitud. Escribe en
-                   SIG_CUADRO_MODIFICADO_CMN, que segun los datos de 2026 no se
-                   puebla hasta la consolidacion. */
+                /* Anexo 4 firmado: una operacion POR SOLICITUD, es decir una por
+                   area usuaria del paquete. Es el registro multiple de
+                   aprobaciones: un Anexo 4 que agrupa cinco Anexos 3 aprueba
+                   cinco solicitudes en SIGA, cada una con su centro de costo.
+                   Escribe en SIG_CUADRO_MODIFICADO_CMN, que segun los datos de
+                   2026 no se puebla hasta la consolidacion. */
                 INSERT INTO integracion.Operacion
                     (IdempotenciaKey, IdExpediente, IdSolicitud, IdSolicitudItem,
                      Operacion, Procedimiento, Secuencia, Estado, RequestJson,
@@ -462,16 +693,26 @@ BEGIN
                      EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
                 SELECT
                     CONCAT(CONVERT(varchar(36), s.IdSolicitud), '::',
-                           CONVERT(varchar(10), @VersionNueva), ':CONSOLIDAR_CMN'),
-                    @IdExpediente, s.IdSolicitud, NULL,
+                           CONVERT(varchar(10), e.Version), ':CONSOLIDAR_CMN'),
+                    e.IdExpediente, s.IdSolicitud, NULL,
                     'CONSOLIDAR_CMN', 'integracion.paEscribirCuadroModificado', 1, 'PENDIENTE',
                     (SELECT s.AnoEje, s.SecEjec, s.CentroCosto, s.Codigo,
+                            Comentario = @Comentario,
+                            /* El paquete viaja en el request para que el error de
+                               SIGA, si lo hay, se pueda leer contra el Anexo 4
+                               concreto y no solo contra la solicitud. */
+                            Anexo4 = (SELECT TOP 1 p.Codigo
+                                        FROM cmn.PaqueteSolicitud AS ps
+                                        JOIN cmn.Paquete AS p ON p.IdPaquete = ps.IdPaquete
+                                       WHERE ps.IdSolicitud = s.IdSolicitud
+                                         AND ps.Activo = 1 AND p.Anulado = 0),
                             Items = (SELECT COUNT(*) FROM cmn.SolicitudItem AS i2
                                       WHERE i2.IdSolicitud = s.IdSolicitud AND i2.Activo = 1)
                        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
                     @Cuenta, @Ahora, @Equipo, @Programa
-                  FROM cmn.Solicitud AS s
-                 WHERE s.IdExpediente = @IdExpediente AND s.Activo = 1;
+                  FROM @Lote            AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN cmn.Solicitud    AS s ON s.IdExpediente = e.IdExpediente AND s.Activo = 1;
 
                 SET @Encoladas = @@ROWCOUNT;
             END
@@ -484,7 +725,7 @@ BEGIN
             END
         END
 
-        COMMIT TRANSACTION;
+        COMMIT TRANSACTION; SET @TranPropia = 0;
 
         EXEC sigcm.paRegistrarAuditoria
              @CorrelacionId = @CorrelacionId, @CodigoModulo = @CodigoModulo,
@@ -494,6 +735,11 @@ BEGIN
              @ActorRol = @CodigoRol, @IdActorUnidad = @IdUnidad,
              @OrigenIp = @Ip, @Equipo = @Equipo, @Programa = @Programa;
 
+        /* Version del expediente de referencia, para que el llamador de un solo
+           expediente siga leyendo el mismo campo que antes. Con lote, cada uno
+           trae la suya en Expedientes. */
+        SET @VersionNueva = (SELECT Version FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente);
+
         SELECT @resultado = (
             SELECT 1 AS estado,
                    @IdExpediente     AS IdExpediente,
@@ -501,15 +747,33 @@ BEGIN
                    @EstadoActual     AS CodigoEstadoAnterior,
                    @EstadoDestino    AS CodigoEstado,
                    @VersionNueva     AS Version,
+                   @CantidadLote     AS ExpedientesMovidos,
                    @Encoladas        AS OperacionesEncoladas,
                    @IdObservacion    AS IdObservacion,
-                   N'Se registro la accion satisfactoriamente.' AS mensaje
+                   Expedientes = JSON_QUERY(COALESCE((
+                       SELECT e.IdExpediente, e.Codigo, e.Version, e.CodigoEstado
+                         FROM @Lote AS l
+                         JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                        ORDER BY l.Orden
+                          FOR JSON PATH), '[]')),
+                   CASE WHEN @CantidadLote = 1
+                        THEN N'Se registro la accion satisfactoriamente.'
+                        ELSE CONCAT(N'Se registro la accion sobre ', @CantidadLote,
+                                    N' expedientes.') END AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
@@ -532,6 +796,7 @@ BEGIN
     SET XACT_ABORT ON;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -591,7 +856,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

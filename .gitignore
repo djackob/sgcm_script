@@ -13,3 +13,6 @@ desktop.ini
 .vs/
 *.swp
 *~
+
+# Archivos de bloqueo que deja Word mientras un .docx esta abierto
+~$*

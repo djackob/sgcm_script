@@ -3,8 +3,8 @@
 Esta carpeta contiene lo que toca la base **`SIGA_1750`**, que **no es nuestra**:
 es del producto SIGA, del MEF. Todo lo de aquí se trata con esa regla en mente.
 
-> **Sólo un archivo de esta carpeta se ejecuta en `SIGA_1750`**, y requiere
-> autorización del propietario. Los otros cuatro `.sql` son referencia,
+> **Sólo dos archivos de esta carpeta se ejecutan en `SIGA_1750`**, y requieren
+> autorización del propietario. Los otros `.sql` son referencia,
 > descubrimiento o historia. Ejecutar el que no es puede hacer daño.
 
 ---
@@ -13,7 +13,8 @@ es del producto SIGA, del MEF. Todo lo de aquí se trata con esa regla en mente.
 
 | Archivo | ¿Se ejecuta? | Dónde | Qué es |
 |---|---|---|---|
-| `integracion/usp_ext_registrar_item_cmn.sql` | **SÍ**, previa autorización | `SIGA_1750` | El único entregable. Crea `dbo.usp_ext_registrar_item_cmn` |
+| `integracion/usp_ext_registrar_item_cmn.sql` | **SÍ**, previa autorización | `SIGA_1750` | Crea `dbo.usp_ext_registrar_item_cmn` para inclusiones |
+| `integracion/usp_ext_excluir_item_cmn.sql` | **SÍ**, previa autorización | `SIGA_1750` | Crea `dbo.usp_ext_excluir_item_cmn`; conserva el original, crea la solicitud visible y excluye idempotentemente las cuatro filas anuales |
 | `integracion/usp_ext_crear_orden_servicio_desde_cuadro.sql` | Todavía no | `SIGA_1750` | Propuesta para la Orden de Servicio. Es del módulo Ejecución, fuera del alcance de la v1 |
 | `integracion/descubrimiento/01_perfilado_cmn.sql` | Opcional | `SIGA_1750` | **Sólo lectura.** Sin `INSERT`/`UPDATE`/`DELETE`/DDL. Sirve para verificar qué par de tablas usa el CMN en esa instancia |
 | `integracion/ESQUEMA_dbo.sql` | **NO. NUNCA** | — | Volcado de Navicat del esquema completo de `SIGA_1750`, 139 000 líneas. Es documentación para leer, no un script para correr |
@@ -24,16 +25,19 @@ ejecutar ahí.
 
 ---
 
-## El único que se instala
+## Los procedimientos que se instalan
 
 ```
 integracion/usp_ext_registrar_item_cmn.sql
+integracion/usp_ext_excluir_item_cmn.sql
 ```
 
-Se ejecuta **dentro de `SIGA_1750`** y crea un procedimiento almacenado. Qué
-hace, en una línea: recibe un ítem del Cuadro Multianual de Necesidades con sus
-cantidades mensuales y lo inserta en `SIG_CUADRO_NECESIDAD` y
-`SIG_CUADRO_NECESIDAD_DET`.
+Se ejecutan **dentro de `SIGA_1750`** y crean procedimientos almacenados. El de
+inclusión recibe un ítem con sus cantidades mensuales y lo inserta en
+`SIG_CUADRO_NECESIDAD` y `SIG_CUADRO_NECESIDAD_DET`. El de exclusión conserva
+las cantidades en `SIG_CUADRO_MODIFICADO_DET_ORI`, crea
+`SIG_SOLICITUD_MODIFICACION` en estado `2` (V.B. Jefe), agrega sus cuatro filas
+en `_DET`, registra `SIG_DOCUMENTO_ESTADO` y deja el ítem en estado `E`.
 
 Lo que **no** hace, y es tan importante como lo que hace:
 
@@ -47,6 +51,7 @@ tipados y XML, nada de JSON. Esa es la frontera del diseño (ver más abajo).
 
 ```bash
 sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_registrar_item_cmn.sql
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_excluir_item_cmn.sql
 ```
 
 ### Antes de ejecutarlo
