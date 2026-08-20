@@ -1,4 +1,4 @@
-/*
+﻿/*
 ===============================================================================
   SIGCM - S904 : Cuatro Anexos 3 listos para probar el Anexo 4 multiple
   Motor  : SQL Server 2022 (compat 160)
@@ -32,7 +32,7 @@
   ruta no mira la bandera.
 
   Y aunque hiciera falta, no se habilitaria desde aqui: sobre SIGA_1750 solo
-  escribe el flujo. Ver Proyecto/SIGA_APLICATIVO.md.
+  escribe el flujo. Ver SIGA_APLICATIVO.md.
 
   ---------------------------------------------------------------------------
   POR QUE ESTAS CUATRO Y NO OTRAS

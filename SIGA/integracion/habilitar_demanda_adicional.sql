@@ -18,7 +18,7 @@
   innecesario: flag_da_aprob solo la pide la pantalla "Demanda Adicional", que
   no usamos. Lo que registra el SIGCM se verifica en Modificacion de C.M.N.
 
-  Ver Proyecto/SIGA_APLICATIVO.md, seccion "Regla: no se corrige data dentro de
+  Ver SIGA_APLICATIVO.md, seccion "Regla: no se corrige data dentro de
   SIGA_1750".
 */
 

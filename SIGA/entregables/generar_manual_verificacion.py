@@ -576,8 +576,8 @@ def construir():
 
     tabla(doc,
           ["Documento", "Qué contiene"],
-          [["Proyecto/SIGA_APLICATIVO.md", "Este mismo recorrido en texto plano, para consulta rápida"],
-           ["Proyecto/CONTEXTO.md", "El contexto del proyecto y la bitácora de iteraciones"],
+          [["SIGA_APLICATIVO.md", "Este mismo recorrido en texto plano, para consulta rápida"],
+           ["CONTEXTO.md", "El contexto del proyecto y la bitácora de iteraciones"],
            ["SIGA/integracion/ANALISIS_CMN.md", "El análisis completo de la integración, con la evidencia"],
            ["SIGA/integracion/captura_siga_xe.sql", "Extended Events, para ver el SQL real que envía el aplicativo"],
            ["db/90_pruebas/S904__casos_anexo4_multiple.sql", "Deja cuatro Anexos 3 listos para recorrer el flujo"]],

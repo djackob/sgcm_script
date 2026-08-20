@@ -147,7 +147,7 @@ de **Modificación de C.M.N.**, y ahí es donde hay que mirarlo.
 > No en *Demanda Adicional*. Ese botón está dentro de la pantalla de
 > formulación, exige `flag_da_aprob` y no muestra el cuadro modificado. Se
 > perdió tiempo buscando ahí más de una vez; la ruta buena es la de la tabla de
-> arriba y está desarrollada en `Proyecto/SIGA_APLICATIVO.md`.
+> arriba y está desarrollada en `SIGA_APLICATIVO.md`.
 
 Se comprueba con los conteos de OTI: la formulación tiene **14** ítems y la
 modificación **17**. Los tres de diferencia se agregaron durante el año — uno de

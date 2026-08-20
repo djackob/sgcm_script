@@ -4,6 +4,10 @@ Serie de scripts que construye `DBSIGCM`, la base del Sistema Integrado de
 Gestión de Contrataciones Menores del ANIN. Es la **fuente de verdad** del
 esquema: si un objeto no está aquí, no existe.
 
+> **¿Primera vez en el proyecto?** El punto de entrada no es este archivo, es
+> [`LEEME.md`](LEEME.md): trae el prompt de arranque, el mapa de los cuatro
+> bloques y las reglas. Este README cubre sólo la base de datos.
+
 ## Regla número uno
 
 La línea base es **SQL Server 2022, compatibilidad 160**. No es una preferencia:

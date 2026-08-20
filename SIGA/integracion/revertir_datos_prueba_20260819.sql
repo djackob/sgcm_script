@@ -17,7 +17,7 @@
   queda mal, lo correcto es corregir el sistema y rehacer el caso desde el
   SIGCM, no limpiar SIGA a mano.
 
-  Ver Proyecto/SIGA_APLICATIVO.md, seccion "Regla: no se corrige data dentro de
+  Ver SIGA_APLICATIVO.md, seccion "Regla: no se corrige data dentro de
   SIGA_1750".
 */
 
