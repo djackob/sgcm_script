@@ -52,6 +52,54 @@ SET NOCOUNT ON;
 GO
 
 /* ========================================================================== */
+/* 0. cmn.fnDocumentoVigente                                                 */
+/* ========================================================================== */
+
+/*
+  El archivo del file server que corresponde HOY a un tipo de documento de un
+  expediente: la version vigente del unico documento vivo de ese tipo.
+
+  Por que existe. La pantalla necesita el PDF ya subido para dos cosas: abrirlo
+  al firmar y volver a mostrarlo despues. Sin este dato en la bandeja, el front
+  solo conoce el archivo dentro de la sesion en que lo genero; al recargar, el
+  boton de ver el Anexo se quedaba sin nada que abrir, y el que firmaba no veia
+  el documento que estaba firmando.
+
+  Por que es una funcion y no un OUTER APPLY repetido. Lo consultan las dos
+  rutinas de lectura, por dos tipos de documento cada una: cuatro copias del
+  mismo JOIN de tres tablas. Una sola definicion evita que se separen.
+
+  El TOP 1 no deberia hacer falta —el indice unico filtrado deja un documento
+  vivo por tipo y expediente— pero el ORDER BY lo hace determinista si alguna
+  vez lo hiciera. Es inline: el optimizador la expande, no cuesta nada frente
+  al APPLY escrito a mano.
+*/
+CREATE OR ALTER FUNCTION cmn.fnDocumentoVigente
+(
+    @IdExpediente        uniqueidentifier,
+    @CodigoTipoDocumento varchar(60)
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT TOP 1
+           dv.GeneradoDocumento,
+           dv.NombreDocumento,
+           dv.Estado AS EstadoVersion,
+           d.VersionVigente
+      FROM sigcm.Documento AS d
+      JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+      JOIN sigcm.DocumentoVersion    AS dv ON dv.IdDocumento = d.IdDocumento
+                                          AND dv.Version     = d.VersionVigente
+     WHERE de.IdExpediente        = @IdExpediente
+       AND d.CodigoTipoDocumento  = @CodigoTipoDocumento
+       AND d.Anulado = 0 AND d.Activo = 1
+     ORDER BY d.FechaCreacionAuditoria DESC
+);
+GO
+
+/* ========================================================================== */
 /* 1. cmn.paRegistrarSolicitud                                               */
 /* ========================================================================== */
 
@@ -68,6 +116,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -89,14 +138,16 @@ BEGIN
         /* ---- Cabecera ------------------------------------------------- */
         DECLARE @AnoEje smallint, @SecEjec int, @CentroCosto varchar(15),
                 @TipoOperacion varchar(20), @Sustento nvarchar(max),
-                @DatosAdicionales nvarchar(max);
+                @DatosAdicionales nvarchar(max),
+                @IdSolicitudExistente uniqueidentifier;
 
-        SELECT @AnoEje           = AnoEje,
-               @SecEjec          = SecEjec,
-               @CentroCosto      = CentroCosto,
-               @TipoOperacion    = ISNULL(TipoOperacion, 'MODIFICACION'),
-               @Sustento         = Sustento,
-               @DatosAdicionales = DatosAdicionales
+        SELECT @AnoEje               = AnoEje,
+               @SecEjec              = SecEjec,
+               @CentroCosto          = CentroCosto,
+               @TipoOperacion        = ISNULL(TipoOperacion, 'MODIFICACION'),
+               @Sustento             = Sustento,
+               @DatosAdicionales     = DatosAdicionales,
+               @IdSolicitudExistente = IdSolicitud
         FROM OPENJSON(@parametro, '$.Solicitud')
         WITH (
             AnoEje           smallint,
@@ -104,7 +155,8 @@ BEGIN
             CentroCosto      varchar(15),
             TipoOperacion    varchar(20),
             Sustento         nvarchar(max),
-            DatosAdicionales nvarchar(max) AS JSON
+            DatosAdicionales nvarchar(max) AS JSON,
+            IdSolicitud      uniqueidentifier
         );
 
         IF @AnoEje IS NULL OR @SecEjec IS NULL
@@ -251,7 +303,9 @@ BEGIN
             THROW 51113, @errItem, 1;
         END
 
-        /* La referencia debe existir de verdad en el cuadro vigente de SIGA. */
+        /* La referencia debe existir, seguir activa y no estar alcanzada por
+           otra solicitud. La vista contiene tambien exclusiones historicas;
+           esas filas no son elegibles aunque la clave aun exista. */
         SET @Orden = NULL;
         SELECT TOP 1 @Orden = i.Orden
           FROM #Item AS i
@@ -259,7 +313,10 @@ BEGIN
            AND NOT EXISTS (SELECT 1 FROM siga.vwCuadroVigenteItem AS c
                             WHERE c.AnoEje = @AnoEje AND c.SecEjec = @SecEjec
                               AND c.CentroCosto = @CentroCosto
-                              AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem);
+                              AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem
+                              AND c.FlagModificado = 0 AND c.FlagSolicitud = 0
+                              AND c.MotivoSolicitud = '0' AND c.EstadoSiga IN ('C','I')
+                              AND c.CantAno0 + c.CantAno1 + c.CantAno2 + c.CantAno3 > 0);
         IF @Orden IS NOT NULL
         BEGIN
             SET @errItem = CONCAT('MAESTRO_CUADRO: el item ', @Orden,
@@ -267,8 +324,35 @@ BEGIN
             THROW 51114, @errItem, 1;
         END
 
+        /* En exclusion/modificacion la referencia de SIGA es la autoridad. El
+           navegador no puede cambiar item, clasificacion o precio de la fila
+           elegida y hacer que la cola opere sobre una combinacion inventada. */
+        UPDATE i
+           SET i.TipoTarea     = c.TipoTarea,
+               i.NivelTarea   = c.NivelTarea,
+               i.CodigoTarea  = c.CodigoTarea,
+               i.SecFunc      = c.SecFunc,
+               i.Origen       = c.Origen,
+               i.FuenteFinanc = c.FuenteFinanc,
+               i.Clasificador = c.Clasificador,
+               i.TipoUso      = c.TipoUso,
+               i.TipoBien     = c.TipoBien,
+               i.GrupoBien    = c.GrupoBien,
+               i.ClaseBien    = c.ClaseBien,
+               i.FamiliaBien  = c.FamiliaBien,
+               i.ItemBien     = c.ItemBien,
+               i.PrecioUnitario = c.PrecioUnit
+          FROM #Item AS i
+          JOIN siga.vwCuadroVigenteItem AS c
+            ON c.AnoEje = @AnoEje AND c.SecEjec = @SecEjec
+           AND c.CentroCosto = @CentroCosto
+           AND c.SecCuadro = i.RefSecCuadro AND c.SecItem = i.RefSecItem
+         WHERE i.TipoMovimiento <> 'INCLUSION';
+
         /* Catalogo. La unidad de medida se toma de SIGA, no de lo que mande el
            cliente: es dato del catalogo y no del formulario. */
+        UPDATE #Item SET UnidadMedida = NULL;
+
         UPDATE i
            SET i.UnidadMedida = c.UnidadMedida
           FROM #Item AS i
@@ -336,6 +420,27 @@ BEGIN
             THROW 51118, @errItem, 1;
         END
 
+        /* Una inclusion solo se guarda si la combinacion presupuestal existe
+           en el techo real de SIGA. Esto evita descubrir el error recien cuando
+           el worker intenta escribir. */
+        SET @Orden = NULL;
+        SELECT TOP 1 @Orden = i.Orden
+          FROM #Item AS i
+         WHERE i.TipoMovimiento = 'INCLUSION'
+           AND NOT EXISTS (SELECT 1
+                             FROM siga.vwTechoPresupuesto AS t
+                            WHERE t.AnoEje = @AnoEje AND t.SecEjec = @SecEjec
+                              AND t.CentroCosto = @CentroCosto AND t.FaseCuadro = 5
+                              AND t.SecFunc = i.SecFunc
+                              AND t.Origen = i.Origen AND t.FuenteFinanc = i.FuenteFinanc
+                              AND t.Clasificador = i.Clasificador);
+        IF @Orden IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT('MAESTRO_TECHO: el item ', @Orden,
+                ' no tiene una combinacion valida de tarea, meta, fuente y clasificador en SIGA.');
+            THROW 51121, @errItem, 1;
+        END
+
         /* ---- Periodos a tabla temporal -------------------------------- */
         CREATE TABLE #Periodo (
             Orden     int NOT NULL,
@@ -380,14 +485,61 @@ BEGIN
             THROW 51120, 'CONFLICTO_CONFIGURACION: el modulo CMN no tiene estado inicial. Falta ejecutar S001.', 1;
 
         DECLARE @Codigo varchar(40);
-        EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
-
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @IdExpediente uniqueidentifier;
         DECLARE @IdSolicitud  uniqueidentifier;
+        DECLARE @EsActualizacion bit = 0;
+        DECLARE @EstadoActual varchar(60);
+        DECLARE @VersionActual int;
 
-        BEGIN TRANSACTION;
+        IF @IdSolicitudExistente IS NOT NULL
+        BEGIN
+            SELECT @IdSolicitud   = s.IdSolicitud,
+                   @IdExpediente  = s.IdExpediente,
+                   @Codigo        = s.Codigo,
+                   @EstadoActual  = e.CodigoEstado,
+                   @VersionActual = e.Version
+              FROM cmn.Solicitud AS s
+              JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
+             WHERE s.IdSolicitud = @IdSolicitudExistente
+               AND s.Activo = 1 AND e.Anulado = 0 AND e.Activo = 1;
 
+            IF @IdSolicitud IS NULL
+                THROW 51122, 'NO_ENCONTRADO: la solicitud a actualizar no existe o esta anulada.', 1;
+
+            IF @EstadoActual NOT IN ('CMN_BORRADOR', 'CMN_OBSERVADO')
+            BEGIN
+                DECLARE @errEdit nvarchar(400) = CONCAT(
+                    'CONFLICTO_ESTADO: la solicitud ', @Codigo,
+                    ' esta en ', @EstadoActual, ' y solo se modifica en borrador u observado.');
+                THROW 51123, @errEdit, 1;
+            END
+
+            IF EXISTS (SELECT 1 FROM integracion.MapeoCmn WHERE IdSolicitud = @IdSolicitud)
+                THROW 51124, 'CONFLICTO_SIGA: los items ya estan registrados en SIGA y no se pueden reemplazar.', 1;
+
+            SET @EsActualizacion = 1;
+        END
+        ELSE
+            EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
+
+        BEGIN TRANSACTION; SET @TranPropia = 1;
+
+        IF @EsActualizacion = 1
+        BEGIN
+            UPDATE cmn.Solicitud
+               SET Sustento = @Sustento,
+                   DatosAdicionales = @DatosAdicionales,
+                   UsuarioModificacionAuditoria = @Cuenta,
+                   FechaModificacionAuditoria = @Ahora,
+                   EquipoModificacionAuditoria = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdSolicitud = @IdSolicitud;
+
+            DELETE FROM cmn.SolicitudItem WHERE IdSolicitud = @IdSolicitud;
+        END
+        ELSE
+        BEGIN
         INSERT INTO sigcm.Expediente
             (Codigo, CodigoModulo, AnoEje, IdUnidadOrigen, CodigoEstado,
              IdUnidadActual, IdResponsableActual, Version,
@@ -411,6 +563,7 @@ BEGIN
              @Cuenta, @Ahora, @Equipo, @Programa);
 
         SELECT @IdSolicitud = IdSolicitud FROM cmn.Solicitud WHERE IdExpediente = @IdExpediente;
+        END
 
         /* Los identificadores se capturan con OUTPUT porque NEWSEQUENTIALID es un
            DEFAULT y no hay SCOPE_IDENTITY para uniqueidentifier. */
@@ -452,18 +605,26 @@ BEGIN
              Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
         VALUES
-            (@IdExpediente, NULL, @CodigoEstadoInicial, NULL,
-             'Registro inicial del Anexo 3', @IdUsuario, @CodigoRol, @IdUnidad,
+            (@IdExpediente,
+             CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE NULL END,
+             CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE @CodigoEstadoInicial END,
+             NULL,
+             CASE WHEN @EsActualizacion = 1
+                  THEN 'Subsanacion del Anexo 3'
+                  ELSE 'Registro inicial del Anexo 3' END,
+             @IdUsuario, @CodigoRol, @IdUnidad,
              (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
              @Cuenta, @Equipo, @Programa);
 
-        COMMIT TRANSACTION;
+        COMMIT TRANSACTION; SET @TranPropia = 0;
 
         DECLARE @Items int = (SELECT COUNT(*) FROM #Item);
+        DECLARE @AccionAudit varchar(20) = CASE WHEN @EsActualizacion = 1 THEN 'MODIFICAR' ELSE 'REGISTRAR' END;
 
         EXEC sigcm.paRegistrarAuditoria
              @CorrelacionId = @CorrelacionId, @CodigoModulo = 'CMN',
-             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud, @Accion = 'REGISTRAR',
+             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud,
+             @Accion = @AccionAudit,
              @Resultado = 'OK', @IdActor = @IdUsuario, @ActorCuenta = @Cuenta,
              @ActorRol = @CodigoRol, @IdActorUnidad = @IdUnidad,
              @OrigenIp = @Ip, @Equipo = @Equipo, @Programa = @Programa,
@@ -474,17 +635,27 @@ BEGIN
                    @IdSolicitud  AS IdSolicitud,
                    @IdExpediente AS IdExpediente,
                    @Codigo       AS Codigo,
-                   @CodigoEstadoInicial AS CodigoEstado,
-                   1 AS Version,
+                   CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE @CodigoEstadoInicial END AS CodigoEstado,
+                   CASE WHEN @EsActualizacion = 1 THEN @VersionActual ELSE 1 END AS Version,
                    @Items AS Items,
                    (@Items * 48) AS Periodos,
-                   N'Se realizo el registro satisfactoriamente.' AS mensaje
+                   CASE WHEN @EsActualizacion = 1
+                        THEN CONCAT(N'Se actualizo la solicitud ', @Codigo, N'. El Anexo 3 se regenera con los cambios.')
+                        ELSE N'Se realizo el registro satisfactoriamente.' END AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado,
                    ERROR_MESSAGE() AS mensaje,
@@ -499,8 +670,10 @@ GO
 /* 2. cmn.paObtenerSolicitud                                                 */
 /* ========================================================================== */
 
-/* Devuelve la solicitud completa: cabecera, items y los 48 periodos anidados por
-   item. Es lo que consume el visor del Anexo 3.
+/*    Devuelve la solicitud completa: cabecera, items y los 48 periodos anidados por
+   item. Es lo que consume el visor del Anexo 3 y el formulario al modificar una
+   solicitud observada: tarea, fuente, clasificador y codigo SIGA tienen que
+   volver para precargar los combos.
 
    Entrada: { "Actor": {...}, "IdSolicitud": "..." } */
 CREATE OR ALTER PROCEDURE cmn.paObtenerSolicitud
@@ -513,6 +686,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -547,10 +721,23 @@ BEGIN
                    Estado = w.Nombre,
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
                    CentroCostoNombre = cc.NombreDepend,
+                   /* El PDF que vive en el file server, para firmarlo y para
+                      volver a verlo. Sin esto la pantalla solo conoce el archivo
+                      dentro de la sesion en que lo genero: al recargar, el boton
+                      de ver el Anexo se quedaba sin nada que abrir. */
+                   DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
+                   DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
                    Items = JSON_QUERY(COALESCE((
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
                               r.PrecioUnitario, r.SecFunc, r.Clasificador,
+                              r.TipoBien, r.GrupoBien, r.ClaseBien, r.FamiliaBien, r.ItemBien,
+                              TipoTarea     = RTRIM(i.TipoTarea),
+                              NivelTarea    = RTRIM(i.NivelTarea),
+                              i.CodigoTarea,
+                              Origen        = RTRIM(i.Origen),
+                              FuenteFinanc  = RTRIM(i.FuenteFinanc),
+                              TipoUso       = RTRIM(i.TipoUso),
                               r.RefSecCuadro, r.RefSecItem,
                               r.CantidadAno0, r.CantidadAno1, r.CantidadAno2, r.CantidadAno3,
                               r.MontoAno0, r.MontoAno1, r.MontoAno2, r.MontoAno3,
@@ -562,6 +749,7 @@ BEGIN
                                    ORDER BY p.AnoOffset, p.Mes
                                      FOR JSON PATH), '[]'))
                          FROM cmn.vwItemResumen AS r
+                         JOIN cmn.SolicitudItem AS i ON i.IdSolicitudItem = r.IdSolicitudItem
                         WHERE r.IdSolicitud = s.IdSolicitud
                         ORDER BY r.Orden
                           FOR JSON PATH), '[]')),
@@ -573,13 +761,23 @@ BEGIN
               LEFT JOIN siga.vwCentroCosto AS cc
                      ON cc.AnoEje = s.AnoEje AND cc.SecEjec = s.SecEjec
                     AND cc.CentroCosto = s.CentroCosto
+              OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
+              OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
              WHERE s.IdSolicitud = @IdSolicitud
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
@@ -612,6 +810,7 @@ BEGIN
     SET DEADLOCK_PRIORITY LOW;
 
     DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
 
     BEGIN TRY
         IF ISJSON(@parametro) <> 1
@@ -690,10 +889,35 @@ BEGIN
                                               JOIN cmn.SolicitudItemPeriodo AS p
                                                 ON p.IdSolicitudItem = it.IdSolicitudItem
                                              WHERE it.IdSolicitud = s.IdSolicitud),
+                              /* Area usuaria de origen: en la bandeja de
+                                 Abastecimiento conviven expedientes de varias, y
+                                 sin esto la fila no dice de quien es. */
+                              AreaUsuaria = uo.Nombre,
+                              SiglaArea   = uo.Sigla,
+                              /* El Anexo 4 que agrupa esta solicitud, si ya lo
+                                 hay. La pantalla lo usa para agrupar las filas
+                                 de un mismo paquete y para no volver a ofrecer
+                                 en la seleccion algo ya tomado. */
+                              pq.IdPaquete,
+                              CodigoAnexo4 = pq.Codigo,
+                              /* El PDF ya subido al file server, por Anexo. La
+                                 fila necesita conocerlo para ofrecer «ver el
+                                 Anexo» sin depender de que esta misma sesion lo
+                                 haya generado. */
+                              DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
+                              DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
                          FROM cmn.Solicitud AS s
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
+                         JOIN sigcm.Unidad     AS uo ON uo.IdUnidad = e.IdUnidadOrigen
+                         OUTER APPLY (SELECT TOP 1 pk.IdPaquete, pk.Codigo
+                                        FROM cmn.PaqueteSolicitud AS ps
+                                        JOIN cmn.Paquete AS pk ON pk.IdPaquete = ps.IdPaquete
+                                       WHERE ps.IdSolicitud = s.IdSolicitud
+                                         AND ps.Activo = 1 AND pk.Anulado = 0) AS pq
+                         OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
+                         OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
@@ -711,7 +935,15 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        /* Solo se deshace la transaccion que ESTA rutina abrio.
+
+           Antes decia "IF @@TRANCOUNT > 0 ROLLBACK", y eso deshacia tambien la
+           transaccion de quien llama. Casi todos los errores de aqui son de
+           validacion y ocurren ANTES de abrir nada: con la version anterior, un
+           "falta IdExpediente" bastaba para tirar abajo el trabajo del llamador,
+           que ni siquiera sabria por que. Ademas, bajo INSERT ... EXEC el motor
+           prohibe el ROLLBACK y el error real quedaba tapado por un 3915. */
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
                    JSON_QUERY('[]') AS Solicitudes

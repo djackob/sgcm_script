@@ -254,13 +254,14 @@ BEGIN
                 IF @EstadoCmn IS NULL
                     THROW 51416, 'NO_ENCONTRADO: la modificacion del CMN indicada no existe o esta anulada.', 1;
 
-                /* REQ-04 exige un Anexo 4 FINALIZADO: una modificacion que
-                   todavia esta en tramite no habilita nada. */
-                IF @EstadoCmn <> 'CMN_FINALIZADO'
+                /* El Anexo 4 llega al area usuaria en CMN_A4_ENVIADO, sin
+                   recepcion. CMN_FINALIZADO queda para expedientes que ya
+                   cerraron con el paso anterior. */
+                IF @EstadoCmn NOT IN ('CMN_A4_ENVIADO', 'CMN_FINALIZADO')
                 BEGIN
                     DECLARE @errCmn nvarchar(500) = CONCAT(
                         'CONFLICTO_CMN: la modificacion del CMN esta en estado ', @EstadoCmn,
-                        ' y solo habilita el requerimiento cuando el Anexo 4 ha sido recepcionado.');
+                        ' y solo habilita el requerimiento cuando el Anexo 4 ya esta en el area usuaria.');
                     THROW 51417, @errCmn, 1;
                 END
             END
