@@ -698,6 +698,10 @@ GO
   Bandeja del modulo, con el mismo criterio que la de CMN: por defecto muestra
   lo que esta en la unidad del actor Y cuyo estado tiene como responsable su rol.
 
+  Cada fila trae Transiciones: las mismas que sigcm.paListarTransicionDisponible
+  para ese expediente y este actor. La bandeja pinta los botones de accion con
+  ese arreglo y no vuelve a consultar el motor por cada fila.
+
   Entrada:
   { "Actor": {...},
     "Filtro": { "SoloMiBandeja":true, "CodigoEstado":null, "AnoEje":2026,
@@ -795,11 +799,63 @@ BEGIN
                                         WHERE it.IdRequerimiento = r.IdRequerimiento AND it.Activo = 1),
                               Pedidos = (SELECT COUNT(*) FROM requerimiento.RequerimientoPedido AS pe
                                           WHERE pe.IdRequerimiento = r.IdRequerimiento AND pe.Activo = 1),
+                              /* Mismas transiciones que sigcm.paListarTransicionDisponible
+                                 para este expediente y este rol. JSON_QUERY evita
+                                 que FOR JSON las escape como texto. */
+                              Transiciones = JSON_QUERY(COALESCE((
+                                  SELECT t.CodigoTransicion,
+                                         NombreAccion = CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado = 'CMN_EN_EVAL_OA'
+                                                 THEN N'Firmar y remitir subsanado a OA'
+                                             ELSE t.NombreAccion
+                                         END,
+                                         CodigoEstadoDestino = CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado IS NOT NULL
+                                                 THEN dest.CodigoEstado
+                                             ELSE t.CodigoEstadoDestino
+                                         END,
+                                         EstadoDestino = d.Nombre,
+                                         t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
+                                         t.EncolaIntegracion, t.GeneraObservacion
+                                    FROM sigcm.Transicion AS t
+                                    JOIN sigcm.Estado AS d ON d.CodigoEstado =
+                                         CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado IS NOT NULL
+                                                 THEN dest.CodigoEstado
+                                             ELSE t.CodigoEstadoDestino
+                                         END
+                                   WHERE t.CodigoModulo = e.CodigoModulo
+                                     AND t.CodigoEstadoOrigen = e.CodigoEstado
+                                     AND t.Activo = 1
+                                     AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS tr
+                                                  WHERE tr.CodigoTransicion = t.CodigoTransicion
+                                                    AND tr.CodigoRol = @CodigoRol)
+                                   ORDER BY t.CodigoTransicion
+                                     FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
                          FROM requerimiento.Requerimiento AS r
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
                          JOIN sigcm.TipoContratacion AS tc ON tc.CodigoTipoContratacion = r.CodigoTipoContratacion
+                         OUTER APPLY (
+                             SELECT TOP 1 o.CodigoEstadoRetorno
+                               FROM sigcm.Observacion AS o
+                              WHERE o.IdExpediente = e.IdExpediente AND o.Activo = 1
+                                AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
+                              ORDER BY o.FechaCreacionAuditoria DESC
+                         ) AS obs
+                         OUTER APPLY (
+                             SELECT CASE
+                                        WHEN obs.CodigoEstadoRetorno = 'CMN_EN_EVAL_OA'
+                                            THEN 'CMN_EN_EVAL_OA'
+                                        WHEN obs.CodigoEstadoRetorno LIKE 'CMN_EN_ABAST%'
+                                            THEN 'CMN_EN_ABAST_JEFE'
+                                        ELSE NULL
+                                    END AS CodigoEstado
+                         ) AS dest
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND r.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))

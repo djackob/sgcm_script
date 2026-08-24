@@ -791,9 +791,13 @@ GO
 /* ========================================================================== */
 
 /*
-  Bandeja del modulo. El filtro por defecto es "mi bandeja": lo que esta en la
+  Bandeja del modulo.   El filtro por defecto es "mi bandeja": lo que esta en la
   unidad del actor Y cuyo estado tiene como responsable el rol del actor. Asi el
   especialista no ve lo que le toca firmar al jefe, ni al reves.
+
+  Cada fila trae Transiciones: las mismas que sigcm.paListarTransicionDisponible
+  para ese expediente y este actor. La bandeja pinta los botones de accion con
+  ese arreglo y no vuelve a consultar el motor por cada fila.
 
   Entrada:
   { "Actor": {...},
@@ -906,6 +910,42 @@ BEGIN
                                  haya generado. */
                               DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
                               DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
+                              /* Mismas transiciones que sigcm.paListarTransicionDisponible
+                                 para este expediente y este rol. JSON_QUERY evita
+                                 que FOR JSON las escape como texto. */
+                              Transiciones = JSON_QUERY(COALESCE((
+                                  SELECT t.CodigoTransicion,
+                                         NombreAccion = CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado = 'CMN_EN_EVAL_OA'
+                                                 THEN N'Firmar y remitir subsanado a OA'
+                                             ELSE t.NombreAccion
+                                         END,
+                                         CodigoEstadoDestino = CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado IS NOT NULL
+                                                 THEN dest.CodigoEstado
+                                             ELSE t.CodigoEstadoDestino
+                                         END,
+                                         EstadoDestino = d.Nombre,
+                                         t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
+                                         t.EncolaIntegracion, t.GeneraObservacion
+                                    FROM sigcm.Transicion AS t
+                                    JOIN sigcm.Estado AS d ON d.CodigoEstado =
+                                         CASE
+                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                                  AND dest.CodigoEstado IS NOT NULL
+                                                 THEN dest.CodigoEstado
+                                             ELSE t.CodigoEstadoDestino
+                                         END
+                                   WHERE t.CodigoModulo = e.CodigoModulo
+                                     AND t.CodigoEstadoOrigen = e.CodigoEstado
+                                     AND t.Activo = 1
+                                     AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS r
+                                                  WHERE r.CodigoTransicion = t.CodigoTransicion
+                                                    AND r.CodigoRol = @CodigoRol)
+                                   ORDER BY t.CodigoTransicion
+                                     FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
                          FROM cmn.Solicitud AS s
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
@@ -918,6 +958,22 @@ BEGIN
                                          AND ps.Activo = 1 AND pk.Anulado = 0) AS pq
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
+                         OUTER APPLY (
+                             SELECT TOP 1 o.CodigoEstadoRetorno
+                               FROM sigcm.Observacion AS o
+                              WHERE o.IdExpediente = e.IdExpediente AND o.Activo = 1
+                                AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
+                              ORDER BY o.FechaCreacionAuditoria DESC
+                         ) AS obs
+                         OUTER APPLY (
+                             SELECT CASE
+                                        WHEN obs.CodigoEstadoRetorno = 'CMN_EN_EVAL_OA'
+                                            THEN 'CMN_EN_EVAL_OA'
+                                        WHEN obs.CodigoEstadoRetorno LIKE 'CMN_EN_ABAST%'
+                                            THEN 'CMN_EN_ABAST_JEFE'
+                                        ELSE NULL
+                                    END AS CodigoEstado
+                         ) AS dest
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
