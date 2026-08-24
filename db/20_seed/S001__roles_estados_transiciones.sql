@@ -116,8 +116,8 @@ GO
 DECLARE @Rol TABLE (CodigoRol varchar(40), Nombre varchar(150),
                     Descripcion nvarchar(400), EsTecnico bit);
 INSERT INTO @Rol VALUES
-  ('AREA_JEFE',          'Area usuaria - Jefe',             'Firma el Anexo 3, remite a OA y consulta el Anexo 4 en bandeja', 0),
-  ('AREA_COORDINADOR',   'Area usuaria - Coordinador',      'Perfil retirado del flujo CMN: ya no interviene', 0),
+  ('AREA_JEFE',          'Area usuaria - Jefe',             'Firma el Anexo 3, remite a OA y recepciona el Anexo 4', 0),
+  ('AREA_COORDINADOR',   'Area usuaria - Coordinador',      'Deriva entre el especialista y el jefe del area usuaria', 0),
   ('AREA_ESPECIALISTA',  'Area usuaria - Especialista',     'Registra el Anexo 3 y subsana observaciones', 0),
   ('OA',                 'Oficina de Administracion',       'Revisa; observa o deriva a Abastecimiento', 0),
   ('ABAST_JEFE',         'Abastecimiento - Jefe',           'Recibe, deriva y pone la ultima firma del Anexo 3 y del Anexo 4', 0),
@@ -149,7 +149,7 @@ GO
 
 DECLARE @RolModulo TABLE (CodigoRol varchar(40), CodigoModulo varchar(30));
 INSERT INTO @RolModulo VALUES
-  ('AREA_JEFE','CMN'), ('AREA_ESPECIALISTA','CMN'), ('OA','CMN'),
+  ('AREA_JEFE','CMN'), ('AREA_COORDINADOR','CMN'), ('AREA_ESPECIALISTA','CMN'), ('OA','CMN'),
   ('ABAST_JEFE','CMN'), ('ABAST_COORDINADOR','CMN'), ('ABAST_ESPECIALISTA','CMN'),
   ('ADMIN_SISTEMA','CMN');
 
@@ -158,13 +158,6 @@ SELECT s.CodigoRol, s.CodigoModulo
   FROM @RolModulo AS s
  WHERE NOT EXISTS (SELECT 1 FROM sigcm.RolModulo AS d
                     WHERE d.CodigoRol = s.CodigoRol AND d.CodigoModulo = s.CodigoModulo);
-
-/* AREA_COORDINADOR ya no existe en el flujo CMN: especialista <-> jefe. */
-DELETE d
-  FROM sigcm.RolModulo AS d
- WHERE d.CodigoModulo = 'CMN'
-   AND NOT EXISTS (SELECT 1 FROM @RolModulo AS s
-                    WHERE s.CodigoRol = d.CodigoRol AND s.CodigoModulo = d.CodigoModulo);
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -175,31 +168,25 @@ GO
   El estado dice DE QUIEN es el expediente ahora mismo: RolResponsable es lo que
   cmn.paListarSolicitud cruza contra el rol del actor para armar su bandeja. Por
   eso cada escalon de derivacion es un estado y no un comentario: si el paso del
-  jefe al especialista no fuera un estado, el expediente le aparaceria a los
-  dos a la vez y ninguno sabria si le toca.
+  coordinador al especialista no fuera un estado, el expediente le aparaceria a
+  los dos a la vez y ninguno sabria si le toca.
 
   La cadena completa, en el orden del flujo aprobado por Abastecimiento:
 
-    area usuaria          BORRADOR -> PEND_FIRMA_A3
-                          (al firmar, pasa solo a OA)
-                          En AU ya no interviene coordinador: especialista <-> jefe.
+    area usuaria          BORRADOR -> PEND_FIRMA_A3 -> A3_FIRMADO
     OA                    EN_EVAL_OA
     Abastecimiento        EN_ABAST_JEFE -> EN_ABAST_COORD -> EN_ABAST_ESP
-      observacion OA      EN_EVAL_OA -> OBS_AU_JEFE -> OBSERVADO
-                          -> SUBS_AU_JEFE -> EN_EVAL_OA (no salta a Abastecimiento)
-      observacion Abast   EN_ABAST_ESP -> OBS_ABAST_COORD -> OBS_ABAST_JEFE
-                          -> OBS_AU_JEFE (no pasa por OA) -> OBSERVADO
-                          -> SUBS_AU_JEFE -> EN_ABAST_JEFE -> EN_ABAST_COORD
-                          -> EN_ABAST_ESP
-      sin observacion     A3_APROBADO (conformidad del especialista)
-    Anexo 4               A4_FIRMA_JEFE
-    cierre                A4_ENVIADO (llega al area usuaria sin accion;
-                          ya no se recepciona)
+      con observacion     OBS_ABAST_COORD -> OBS_ABAST_JEFE
+                          -> OBS_AU_JEFE -> OBS_AU_COORD -> OBSERVADO
+                          -> SUBS_AU_COORD -> SUBS_AU_JEFE -> EN_ABAST_JEFE
+      sin observacion     A3_FIRMA_COORD -> A3_FIRMA_JEFE -> A3_APROBADO
+    Anexo 4               A4_FIRMA_COORD -> A4_FIRMA_JEFE
+    cierre                A4_ENVIADO -> FINALIZADO
 
-  Los dos momentos de escritura en SIGA: la conformidad del especialista
-  (ITEMS_ANEXO_3) y la firma del Anexo 4 por el jefe (CONSOLIDAR_CMN), que
-  ademas remite el documento a cada area usuaria del paquete. El jefe de
-  Abastecimiento no firma el Anexo 3.
+  Los dos momentos de escritura en SIGA caen en A3_FIRMA_JEFE -> A3_APROBADO
+  (registro del Anexo 3) y en A4_FIRMA_JEFE -> A4_ENVIADO (aprobacion del
+  Anexo 4). Ambos son la firma del jefe de Abastecimiento, que es donde el
+  flujo los ubica.
 */
 DECLARE @Estado TABLE (CodigoEstado varchar(60), Nombre varchar(150), Orden int,
                        EsInicial bit, EsFinal bit, RolResponsable varchar(40) NULL);
@@ -221,14 +208,14 @@ INSERT INTO @Estado VALUES
   ('CMN_SUBS_AU_COORD',   'Subsanado - Coordinador del area usuaria',           62, 0, 0, 'AREA_COORDINADOR'),
   ('CMN_SUBS_AU_JEFE',    'Subsanado - Jefe del area usuaria',                  64, 0, 0, 'AREA_JEFE'),
 
-  ('CMN_A3_FIRMA_COORD',  'Anexo 3 conforme - Coordinador de Abastecimiento',   68, 0, 0, 'ABAST_COORDINADOR'),
-  ('CMN_A3_FIRMA_JEFE',   'Anexo 3 conforme - Jefe de Abastecimiento',          70, 0, 0, 'ABAST_JEFE'),
-  ('CMN_A3_APROBADO',     'Anexo 3 conforme - por generar Anexo 4',             72, 0, 0, 'ABAST_ESPECIALISTA'),
+  ('CMN_A3_FIRMA_COORD',  'Anexo 3 por firmar - Coordinador de Abastecimiento', 68, 0, 0, 'ABAST_COORDINADOR'),
+  ('CMN_A3_FIRMA_JEFE',   'Anexo 3 por firmar - Jefe de Abastecimiento',        70, 0, 0, 'ABAST_JEFE'),
+  ('CMN_A3_APROBADO',     'Anexo 3 aprobado - por generar Anexo 4',             72, 0, 0, 'ABAST_ESPECIALISTA'),
 
   ('CMN_A4_FIRMA_COORD',  'Anexo 4 por firmar - Coordinador de Abastecimiento', 80, 0, 0, 'ABAST_COORDINADOR'),
   ('CMN_A4_FIRMA_JEFE',   'Anexo 4 por firmar - Jefe de Abastecimiento',        85, 0, 0, 'ABAST_JEFE'),
 
-  ('CMN_A4_ENVIADO',      'Anexo 4 en el area usuaria',                        100, 0, 1, 'AREA_JEFE'),
+  ('CMN_A4_ENVIADO',      'Anexo 4 enviado al area usuaria',                   100, 0, 0, 'AREA_JEFE'),
   ('CMN_FINALIZADO',      'Anexo 4 recepcionado - Fin',                        110, 0, 1, NULL),
   ('CMN_ANULADO',         'Anulado',                                           999, 0, 1, NULL);
 
@@ -260,16 +247,10 @@ SELECT s.CodigoEstado, 'CMN', s.Nombre, s.Orden, s.EsInicial, s.EsFinal, s.RolRe
 */
 DECLARE @Remapeo TABLE (Viejo varchar(60), Nuevo varchar(60));
 INSERT INTO @Remapeo VALUES
-  ('CMN_EN_EVAL_UA',     'CMN_EN_ABAST_ESP'),
-  ('CMN_VALIDADO_UA',    'CMN_EN_ABAST_ESP'),
-  ('CMN_PEND_FIRMA_A4',  'CMN_A3_APROBADO'),
-  ('CMN_A4_FIRMADO',     'CMN_A4_ENVIADO'),
-  ('CMN_A3_FIRMA_COORD', 'CMN_A3_APROBADO'),
-  ('CMN_A3_FIRMA_JEFE',  'CMN_A3_APROBADO'),
-  ('CMN_A4_FIRMA_COORD', 'CMN_A4_FIRMA_JEFE'),
-  ('CMN_A3_FIRMADO',     'CMN_EN_EVAL_OA'),
-  ('CMN_OBS_AU_COORD',   'CMN_OBSERVADO'),
-  ('CMN_SUBS_AU_COORD',  'CMN_SUBS_AU_JEFE');
+  ('CMN_EN_EVAL_UA',    'CMN_EN_ABAST_ESP'),
+  ('CMN_VALIDADO_UA',   'CMN_EN_ABAST_ESP'),
+  ('CMN_PEND_FIRMA_A4', 'CMN_A3_APROBADO'),
+  ('CMN_A4_FIRMADO',    'CMN_A4_ENVIADO');
 
 UPDATE e
    SET e.CodigoEstado = r.Nuevo,
@@ -322,17 +303,22 @@ SELECT s.CodigoTipoDocumento, 'CMN', s.Nombre, s.NumeracionVisible, s.AdmiteCons
 
    F003 ahora registra firma por firma en sigcm.Firma —que siempre estuvo
    disenada para eso, con UNIQUE (version, rol)— y solo cierra la version cuando
-   estan todas las de esta tabla. Recien con eso las filas de abajo
+   estan todas las de esta tabla. Recien con eso las siete filas de abajo
    significan algo.
 
-   Anexo 3: solo lo firma el jefe del area usuaria. En Abastecimiento el
-   especialista da conformidad y no hay firma. Anexo 4: lo arma el especialista
-   y lo firma el jefe de Abastecimiento, en los dos espacios del PDF. */
+   Anexo 3: lo firma el jefe del area usuaria y despues lo refrendan los tres
+   escalones de Abastecimiento. Anexo 4: lo arma y firma el especialista, y lo
+   refrendan coordinador y jefe. */
 DECLARE @DocFirma TABLE (CodigoTipoDocumento varchar(60), CodigoRol varchar(40), OrdenFirma smallint);
 INSERT INTO @DocFirma VALUES
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'AREA_JEFE',  1),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'AREA_JEFE',          1),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_ESPECIALISTA', 2),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_COORDINADOR',  3),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_JEFE',         4),
 
-  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE', 1);
+  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_ESPECIALISTA', 1),
+  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_COORDINADOR',  2),
+  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE',         3);
 
 UPDATE d SET d.OrdenFirma = s.OrdenFirma
   FROM sigcm.TipoDocumentoFirma AS d
@@ -368,7 +354,7 @@ GO
   RolFirmaRequerida (V011) es lo que hace posible la firma en cadena. Antes,
   DocumentoRequerido significaba "la version vigente esta FIRMADA", y con cuatro
   firmantes eso solo se cumple al final: el jefe del area usuaria no habria
-  podido enviar a OA un Anexo 3 al que todavia le falta la firma de
+  podido enviar a OA un Anexo 3 al que todavia le faltan las tres firmas de
   Abastecimiento. Con RolFirmaRequerida cada paso exige exactamente la firma que
   lo respalda, y solo la recepcion final del Anexo 4 exige el documento completo.
 */
@@ -392,10 +378,13 @@ INSERT INTO @Tr VALUES
   /* ---------------------------------------------------------------------- */
 
   ('CMN_GENERAR_A3', 'CMN_BORRADOR', 'CMN_PEND_FIRMA_A3',
-   'Derivar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
+   'Generar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
 
-  ('CMN_FIRMAR_A3', 'CMN_PEND_FIRMA_A3', 'CMN_EN_EVAL_OA',
-   'Firmar Anexo 3', 0, 1,
+  ('CMN_FIRMAR_A3', 'CMN_PEND_FIRMA_A3', 'CMN_A3_FIRMADO',
+   'Firmar Anexo 3', 0, 1, 'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
+
+  ('CMN_ENVIAR_OA', 'CMN_A3_FIRMADO', 'CMN_EN_EVAL_OA',
+   'Enviar Anexo 3 a la Oficina de Administracion', 0, 0,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
 
   /* ---------------------------------------------------------------------- */
@@ -406,56 +395,68 @@ INSERT INTO @Tr VALUES
      La entrada a Abastecimiento es siempre por la jefatura, tambien cuando el
      expediente vuelve subsanado. */
   ('CMN_OA_DERIVAR', 'CMN_EN_EVAL_OA', 'CMN_EN_ABAST_JEFE',
-   'Derivar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
+   'Derivar al Jefe de Abastecimiento', 0, 0, NULL, 0, NULL, 0, NULL),
 
   ('CMN_OA_OBSERVAR', 'CMN_EN_EVAL_OA', 'CMN_OBS_AU_JEFE',
-   'Observar Anexo 3', 1, 0, NULL, 0, NULL, 1, NULL),
+   'Observar desde la Oficina de Administracion', 1, 0, NULL, 0, NULL, 1, NULL),
 
   /* ---------------------------------------------------------------------- */
   /* Abastecimiento: bajada jefe -> coordinador -> especialista             */
   /* ---------------------------------------------------------------------- */
 
   ('CMN_ABAST_JEFE_DERIVAR', 'CMN_EN_ABAST_JEFE', 'CMN_EN_ABAST_COORD',
-   'Derivar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
+   'Derivar al Coordinador de Abastecimiento', 0, 0, NULL, 0, NULL, 0, NULL),
 
   ('CMN_ABAST_COORD_DERIVAR', 'CMN_EN_ABAST_COORD', 'CMN_EN_ABAST_ESP',
-   'Derivar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
+   'Derivar al Especialista de Abastecimiento', 0, 0, NULL, 0, NULL, 0, NULL),
 
   /* ---------------------------------------------------------------------- */
   /* Abastecimiento: evaluacion del especialista                            */
   /* ---------------------------------------------------------------------- */
 
   /* El especialista es quien evalua. De aqui salen los dos unicos desenlaces
-     posibles: observar o confirmar. El formulario de evaluacion del frontend se
+     posibles: observar o firmar. El formulario de evaluacion del frontend se
      resuelve eligiendo una de estas dos acciones; no hay un tercer camino
-     "sin decidir" porque un expediente sin decision es un expediente parado.
-     Confirmar no firma. El jefe de Abastecimiento solo firma el Anexo 4. */
+     "sin decidir" porque un expediente sin decision es un expediente parado. */
   ('CMN_ABAST_ESP_OBSERVAR', 'CMN_EN_ABAST_ESP', 'CMN_OBS_ABAST_COORD',
    'Observar el Anexo 3', 1, 0, NULL, 0, NULL, 1, NULL),
 
-  /* Conformidad del especialista: cierra el Anexo 3 sin firma y registra los
-     items en SIGA (ITEMS_ANEXO_3). Quedan con MOTIVO_SOLICITUD distinto de '0':
-     existen pero todavia no se pueden pedir. Desde aqui el mismo especialista
-     arma el Anexo 4, uno o varios Anexos 3 juntos, y lo envia al jefe. */
-  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_APROBADO',
-   'Confirmar el Anexo 3', 0, 0, NULL, 1, 'ITEMS_ANEXO_3', 0, NULL),
+  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_FIRMA_COORD',
+   'Conformar y firmar el Anexo 3', 0, 1,
+   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
+
+  ('CMN_ABAST_COORD_FIRMAR_A3', 'CMN_A3_FIRMA_COORD', 'CMN_A3_FIRMA_JEFE',
+   'Firmar el Anexo 3 y elevar al Jefe', 0, 1,
+   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_COORDINADOR'),
+
+  /* PRIMER MOMENTO DE ESCRITURA EN SIGA.
+     La firma del jefe cierra el Anexo 3 y recien ahi los items entran a
+     SIG_CUADRO_MODIFICADO_DET. Quedan registrados con MOTIVO_SOLICITUD distinto
+     de '0': existen en SIGA pero todavia no se pueden pedir. Lo que los habilita
+     es la aprobacion del Anexo 4, mas abajo. */
+  ('CMN_ABAST_JEFE_FIRMAR_A3', 'CMN_A3_FIRMA_JEFE', 'CMN_A3_APROBADO',
+   'Firmar el Anexo 3 y registrarlo en SIGA', 0, 1,
+   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 1, 'ITEMS_ANEXO_3', 0, 'ABAST_JEFE'),
 
   /* ---------------------------------------------------------------------- */
   /* Devolucion de observaciones, escalon por escalon                       */
   /* ---------------------------------------------------------------------- */
 
   /* La observacion no salta de Abastecimiento al especialista del area: sube
-     por la jerarquia de Abastecimiento. En el area usuaria el jefe la recibe y
-     la deriva al responsable (especialista) que debe subsanar; no pasa por el
-     coordinador. */
+     por la jerarquia de Abastecimiento y baja por la del area usuaria. Son
+     cinco pasos y cada uno es un estado porque cada uno tiene un responsable
+     distinto que debe verlo en su bandeja. */
   ('CMN_OBS_COORD_DERIVAR', 'CMN_OBS_ABAST_COORD', 'CMN_OBS_ABAST_JEFE',
    'Elevar la observacion al Jefe de Abastecimiento', 0, 0, NULL, 0, NULL, 0, NULL),
 
   ('CMN_OBS_JEFE_DEVOLVER', 'CMN_OBS_ABAST_JEFE', 'CMN_OBS_AU_JEFE',
    'Devolver observado al Jefe del area usuaria', 0, 0, NULL, 0, NULL, 0, NULL),
 
-  ('CMN_OBS_AU_JEFE_DERIVAR', 'CMN_OBS_AU_JEFE', 'CMN_OBSERVADO',
-   'Derivar Anexo 3 Observado', 0, 0, NULL, 0, NULL, 0, NULL),
+  ('CMN_OBS_AU_JEFE_DERIVAR', 'CMN_OBS_AU_JEFE', 'CMN_OBS_AU_COORD',
+   'Derivar al Coordinador del area usuaria', 0, 0, NULL, 0, NULL, 0, NULL),
+
+  ('CMN_OBS_AU_COORD_DERIVAR', 'CMN_OBS_AU_COORD', 'CMN_OBSERVADO',
+   'Derivar al Especialista para subsanar', 0, 0, NULL, 0, NULL, 0, NULL),
 
   /* ---------------------------------------------------------------------- */
   /* Subsanacion y retorno                                                  */
@@ -464,20 +465,22 @@ INSERT INTO @Tr VALUES
   /* CMN_SUBSANAR ya no vuelve a CMN_BORRADOR. Volver a borrador significaba
      recorrer otra vez el circuito de registro completo, incluida la firma del
      jefe como si fuera una solicitud nueva. El flujo aprobado dice otra cosa:
-     el especialista corrige sobre el mismo expediente y lo deriva directo al
-     jefe del area usuaria (sin coordinador), que firma y remite a Abastecimiento. */
-  ('CMN_SUBSANAR', 'CMN_OBSERVADO', 'CMN_SUBS_AU_JEFE',
-   'Derivar Anexo 3 subsanado', 1, 0, NULL, 0, NULL, 0, NULL),
+     el especialista corrige sobre el mismo expediente y lo devuelve por la
+     linea, coordinador y jefe, hasta Abastecimiento. */
+  ('CMN_SUBSANAR', 'CMN_OBSERVADO', 'CMN_SUBS_AU_COORD',
+   'Registrar la subsanacion y derivar al Coordinador', 1, 0, NULL, 0, NULL, 0, NULL),
 
-  /* El destino de semilla es Abastecimiento. F004 lo sustituye por
-     CodigoEstadoRetorno: si observo OA, vuelve a OA; si observo Abastecimiento,
-     entra por el jefe de Abastecimiento y no pasa por Administracion.
+  ('CMN_SUBS_COORD_DERIVAR', 'CMN_SUBS_AU_COORD', 'CMN_SUBS_AU_JEFE',
+   'Derivar lo subsanado al Jefe del area usuaria', 0, 0, NULL, 0, NULL, 0, NULL),
 
-     Exige firma otra vez: al subsanar se regenera el Anexo 3 y
-     sigcm.paRegistrarDocumento abre una version nueva, que invalida las firmas
-     de la anterior. */
+  /* Exige firma otra vez, y no es burocracia: al subsanar se regenera el Anexo 3
+     y sigcm.paRegistrarDocumento abre una version nueva, que invalida todas las
+     firmas de la anterior. Mandar a Abastecimiento un documento cuya firma ya no
+     corresponde al contenido es exactamente lo que el versionado existe para
+     impedir. Si el especialista no cambio nada, la version sigue siendo la misma
+     y F003 reconoce la firma vigente sin pedir una nueva. */
   ('CMN_SUBS_JEFE_ENVIAR', 'CMN_SUBS_AU_JEFE', 'CMN_EN_ABAST_JEFE',
-   'Firmar y remitir lo subsanado', 0, 1,
+   'Firmar y remitir subsanado a Abastecimiento', 0, 1,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
 
   /* ---------------------------------------------------------------------- */
@@ -489,8 +492,13 @@ INSERT INTO @Tr VALUES
      expedientes del paquete a la vez —F004 acepta IdExpedientes— porque un
      Anexo 4 a medio armar, con unos expedientes movidos y otros no, no es un
      estado recuperable. */
-  ('CMN_GENERAR_A4', 'CMN_A3_APROBADO', 'CMN_A4_FIRMA_JEFE',
-   'Generar Anexo 4', 0, 0, NULL, 0, NULL, 0, NULL),
+  ('CMN_GENERAR_A4', 'CMN_A3_APROBADO', 'CMN_A4_FIRMA_COORD',
+   'Generar y firmar el Anexo 4', 0, 1,
+   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
+
+  ('CMN_ABAST_COORD_FIRMAR_A4', 'CMN_A4_FIRMA_COORD', 'CMN_A4_FIRMA_JEFE',
+   'Firmar el Anexo 4 y elevar al Jefe', 0, 1,
+   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, 'ABAST_COORDINADOR'),
 
   /* SEGUNDO MOMENTO DE ESCRITURA EN SIGA.
      Aqui se aprueban las solicitudes: MOTIVO_SOLICITUD pasa a '0' y el item
@@ -498,11 +506,19 @@ INSERT INTO @Tr VALUES
      el "multiple registro de aprobaciones" del flujo: un Anexo 4 con cinco
      Anexos 3 produce cinco aprobaciones en SIGA, una por area usuaria.
 
-     El destino es CMN_A4_ENVIADO: tras la firma del jefe el expediente llega
-     al area usuaria para consulta, sin un paso de recepcion. */
+     El destino es CMN_A4_ENVIADO y no un estado intermedio de firmado: el flujo
+     pide que tras la firma del jefe el expediente pase automaticamente al jefe
+     del area usuaria. Un estado intermedio obligaria a un clic mas que nadie
+     pidio. */
   ('CMN_ABAST_JEFE_FIRMAR_A4', 'CMN_A4_FIRMA_JEFE', 'CMN_A4_ENVIADO',
-   'Firmar Anexo 4', 0, 1,
+   'Firmar el Anexo 4, aprobar en SIGA y remitir al area usuaria', 0, 1,
    'CMN_ANEXO_4_APROBACION_MODIFICACION', 1, 'CONSOLIDAR_CMN', 0, 'ABAST_JEFE'),
+
+  /* Unica transicion sin RolFirmaRequerida entre las que exigen documento: al
+     recepcionar, el Anexo 4 ya debe tener sus tres firmas. */
+  ('CMN_RECEPCIONAR_A4', 'CMN_A4_ENVIADO', 'CMN_FINALIZADO',
+   'Recepcionar Anexo 4', 0, 0,
+   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, NULL),
 
   /* ---------------------------------------------------------------------- */
   /* Anulacion                                                              */
@@ -560,10 +576,11 @@ GO
 /* Roles permitidos por transicion. Sustituye a roles_permitidos varchar(40)[]. */
 DECLARE @TrRol TABLE (CodigoTransicion varchar(70), CodigoRol varchar(40));
 INSERT INTO @TrRol VALUES
-  /* Area usuaria: solo especialista y jefe. AREA_COORDINADOR ya no interviene. */
-  ('CMN_GENERAR_A3','AREA_ESPECIALISTA'),
+  /* Area usuaria */
+  ('CMN_GENERAR_A3','AREA_ESPECIALISTA'), ('CMN_GENERAR_A3','AREA_COORDINADOR'),
   ('CMN_GENERAR_A3','AREA_JEFE'),
   ('CMN_FIRMAR_A3','AREA_JEFE'),
+  ('CMN_ENVIAR_OA','AREA_JEFE'),
 
   /* Oficina de Administracion */
   ('CMN_OA_DERIVAR','OA'),
@@ -577,22 +594,28 @@ INSERT INTO @TrRol VALUES
   ('CMN_ABAST_COORD_DERIVAR','ABAST_COORDINADOR'),
   ('CMN_ABAST_ESP_OBSERVAR','ABAST_ESPECIALISTA'),
   ('CMN_ABAST_ESP_FIRMAR_A3','ABAST_ESPECIALISTA'),
+  ('CMN_ABAST_COORD_FIRMAR_A3','ABAST_COORDINADOR'),
+  ('CMN_ABAST_JEFE_FIRMAR_A3','ABAST_JEFE'),
 
   /* Devolucion de observaciones */
   ('CMN_OBS_COORD_DERIVAR','ABAST_COORDINADOR'),
   ('CMN_OBS_JEFE_DEVOLVER','ABAST_JEFE'),
   ('CMN_OBS_AU_JEFE_DERIVAR','AREA_JEFE'),
+  ('CMN_OBS_AU_COORD_DERIVAR','AREA_COORDINADOR'),
 
   /* Subsanacion */
   ('CMN_SUBSANAR','AREA_ESPECIALISTA'),
+  ('CMN_SUBS_COORD_DERIVAR','AREA_COORDINADOR'),
   ('CMN_SUBS_JEFE_ENVIAR','AREA_JEFE'),
 
   /* Anexo 4 */
   ('CMN_GENERAR_A4','ABAST_ESPECIALISTA'),
+  ('CMN_ABAST_COORD_FIRMAR_A4','ABAST_COORDINADOR'),
   ('CMN_ABAST_JEFE_FIRMAR_A4','ABAST_JEFE'),
+  ('CMN_RECEPCIONAR_A4','AREA_JEFE'),
 
   /* Anulacion */
-  ('CMN_ANULAR_BORRADOR','AREA_ESPECIALISTA'),
+  ('CMN_ANULAR_BORRADOR','AREA_ESPECIALISTA'), ('CMN_ANULAR_BORRADOR','AREA_COORDINADOR'),
   ('CMN_ANULAR_BORRADOR','AREA_JEFE'),
   ('CMN_ANULAR_FIRMA_PEND','AREA_JEFE');
 

@@ -236,7 +236,7 @@ SELECT bloque = 'LISTO PARA PROBAR',
 
 PRINT '';
 PRINT '  RECORRIDO EN LA PANTALLA, con /acceso-local:';
-PRINT '   1. Especialista del area  -> Derivar Anexo 3';
+PRINT '   1. Especialista del area  -> Generar Anexo 3';
 PRINT '   2. Jefe del area          -> Firmar Anexo 3 y Enviar a la OA';
 PRINT '   3. prueba.oa              -> Derivar al Jefe de Abastecimiento';
 PRINT '   4. prueba.abast.jefe      -> Derivar al Coordinador';

@@ -138,16 +138,14 @@ BEGIN
         /* ---- Cabecera ------------------------------------------------- */
         DECLARE @AnoEje smallint, @SecEjec int, @CentroCosto varchar(15),
                 @TipoOperacion varchar(20), @Sustento nvarchar(max),
-                @DatosAdicionales nvarchar(max),
-                @IdSolicitudExistente uniqueidentifier;
+                @DatosAdicionales nvarchar(max);
 
-        SELECT @AnoEje               = AnoEje,
-               @SecEjec              = SecEjec,
-               @CentroCosto          = CentroCosto,
-               @TipoOperacion        = ISNULL(TipoOperacion, 'MODIFICACION'),
-               @Sustento             = Sustento,
-               @DatosAdicionales     = DatosAdicionales,
-               @IdSolicitudExistente = IdSolicitud
+        SELECT @AnoEje           = AnoEje,
+               @SecEjec          = SecEjec,
+               @CentroCosto      = CentroCosto,
+               @TipoOperacion    = ISNULL(TipoOperacion, 'MODIFICACION'),
+               @Sustento         = Sustento,
+               @DatosAdicionales = DatosAdicionales
         FROM OPENJSON(@parametro, '$.Solicitud')
         WITH (
             AnoEje           smallint,
@@ -155,8 +153,7 @@ BEGIN
             CentroCosto      varchar(15),
             TipoOperacion    varchar(20),
             Sustento         nvarchar(max),
-            DatosAdicionales nvarchar(max) AS JSON,
-            IdSolicitud      uniqueidentifier
+            DatosAdicionales nvarchar(max) AS JSON
         );
 
         IF @AnoEje IS NULL OR @SecEjec IS NULL
@@ -485,61 +482,14 @@ BEGIN
             THROW 51120, 'CONFLICTO_CONFIGURACION: el modulo CMN no tiene estado inicial. Falta ejecutar S001.', 1;
 
         DECLARE @Codigo varchar(40);
+        EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
+
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @IdExpediente uniqueidentifier;
         DECLARE @IdSolicitud  uniqueidentifier;
-        DECLARE @EsActualizacion bit = 0;
-        DECLARE @EstadoActual varchar(60);
-        DECLARE @VersionActual int;
-
-        IF @IdSolicitudExistente IS NOT NULL
-        BEGIN
-            SELECT @IdSolicitud   = s.IdSolicitud,
-                   @IdExpediente  = s.IdExpediente,
-                   @Codigo        = s.Codigo,
-                   @EstadoActual  = e.CodigoEstado,
-                   @VersionActual = e.Version
-              FROM cmn.Solicitud AS s
-              JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
-             WHERE s.IdSolicitud = @IdSolicitudExistente
-               AND s.Activo = 1 AND e.Anulado = 0 AND e.Activo = 1;
-
-            IF @IdSolicitud IS NULL
-                THROW 51122, 'NO_ENCONTRADO: la solicitud a actualizar no existe o esta anulada.', 1;
-
-            IF @EstadoActual NOT IN ('CMN_BORRADOR', 'CMN_OBSERVADO')
-            BEGIN
-                DECLARE @errEdit nvarchar(400) = CONCAT(
-                    'CONFLICTO_ESTADO: la solicitud ', @Codigo,
-                    ' esta en ', @EstadoActual, ' y solo se modifica en borrador u observado.');
-                THROW 51123, @errEdit, 1;
-            END
-
-            IF EXISTS (SELECT 1 FROM integracion.MapeoCmn WHERE IdSolicitud = @IdSolicitud)
-                THROW 51124, 'CONFLICTO_SIGA: los items ya estan registrados en SIGA y no se pueden reemplazar.', 1;
-
-            SET @EsActualizacion = 1;
-        END
-        ELSE
-            EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
 
         BEGIN TRANSACTION; SET @TranPropia = 1;
 
-        IF @EsActualizacion = 1
-        BEGIN
-            UPDATE cmn.Solicitud
-               SET Sustento = @Sustento,
-                   DatosAdicionales = @DatosAdicionales,
-                   UsuarioModificacionAuditoria = @Cuenta,
-                   FechaModificacionAuditoria = @Ahora,
-                   EquipoModificacionAuditoria = @Equipo,
-                   ProgramaModificacionAuditoria = @Programa
-             WHERE IdSolicitud = @IdSolicitud;
-
-            DELETE FROM cmn.SolicitudItem WHERE IdSolicitud = @IdSolicitud;
-        END
-        ELSE
-        BEGIN
         INSERT INTO sigcm.Expediente
             (Codigo, CodigoModulo, AnoEje, IdUnidadOrigen, CodigoEstado,
              IdUnidadActual, IdResponsableActual, Version,
@@ -563,7 +513,6 @@ BEGIN
              @Cuenta, @Ahora, @Equipo, @Programa);
 
         SELECT @IdSolicitud = IdSolicitud FROM cmn.Solicitud WHERE IdExpediente = @IdExpediente;
-        END
 
         /* Los identificadores se capturan con OUTPUT porque NEWSEQUENTIALID es un
            DEFAULT y no hay SCOPE_IDENTITY para uniqueidentifier. */
@@ -605,26 +554,18 @@ BEGIN
              Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
         VALUES
-            (@IdExpediente,
-             CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE NULL END,
-             CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE @CodigoEstadoInicial END,
-             NULL,
-             CASE WHEN @EsActualizacion = 1
-                  THEN 'Subsanacion del Anexo 3'
-                  ELSE 'Registro inicial del Anexo 3' END,
-             @IdUsuario, @CodigoRol, @IdUnidad,
+            (@IdExpediente, NULL, @CodigoEstadoInicial, NULL,
+             'Registro inicial del Anexo 3', @IdUsuario, @CodigoRol, @IdUnidad,
              (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
              @Cuenta, @Equipo, @Programa);
 
         COMMIT TRANSACTION; SET @TranPropia = 0;
 
         DECLARE @Items int = (SELECT COUNT(*) FROM #Item);
-        DECLARE @AccionAudit varchar(20) = CASE WHEN @EsActualizacion = 1 THEN 'MODIFICAR' ELSE 'REGISTRAR' END;
 
         EXEC sigcm.paRegistrarAuditoria
              @CorrelacionId = @CorrelacionId, @CodigoModulo = 'CMN',
-             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud,
-             @Accion = @AccionAudit,
+             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud, @Accion = 'REGISTRAR',
              @Resultado = 'OK', @IdActor = @IdUsuario, @ActorCuenta = @Cuenta,
              @ActorRol = @CodigoRol, @IdActorUnidad = @IdUnidad,
              @OrigenIp = @Ip, @Equipo = @Equipo, @Programa = @Programa,
@@ -635,13 +576,11 @@ BEGIN
                    @IdSolicitud  AS IdSolicitud,
                    @IdExpediente AS IdExpediente,
                    @Codigo       AS Codigo,
-                   CASE WHEN @EsActualizacion = 1 THEN @EstadoActual ELSE @CodigoEstadoInicial END AS CodigoEstado,
-                   CASE WHEN @EsActualizacion = 1 THEN @VersionActual ELSE 1 END AS Version,
+                   @CodigoEstadoInicial AS CodigoEstado,
+                   1 AS Version,
                    @Items AS Items,
                    (@Items * 48) AS Periodos,
-                   CASE WHEN @EsActualizacion = 1
-                        THEN CONCAT(N'Se actualizo la solicitud ', @Codigo, N'. El Anexo 3 se regenera con los cambios.')
-                        ELSE N'Se realizo el registro satisfactoriamente.' END AS mensaje
+                   N'Se realizo el registro satisfactoriamente.' AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
@@ -670,10 +609,8 @@ GO
 /* 2. cmn.paObtenerSolicitud                                                 */
 /* ========================================================================== */
 
-/*    Devuelve la solicitud completa: cabecera, items y los 48 periodos anidados por
-   item. Es lo que consume el visor del Anexo 3 y el formulario al modificar una
-   solicitud observada: tarea, fuente, clasificador y codigo SIGA tienen que
-   volver para precargar los combos.
+/* Devuelve la solicitud completa: cabecera, items y los 48 periodos anidados por
+   item. Es lo que consume el visor del Anexo 3.
 
    Entrada: { "Actor": {...}, "IdSolicitud": "..." } */
 CREATE OR ALTER PROCEDURE cmn.paObtenerSolicitud
@@ -731,13 +668,6 @@ BEGIN
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
                               r.PrecioUnitario, r.SecFunc, r.Clasificador,
-                              r.TipoBien, r.GrupoBien, r.ClaseBien, r.FamiliaBien, r.ItemBien,
-                              TipoTarea     = RTRIM(i.TipoTarea),
-                              NivelTarea    = RTRIM(i.NivelTarea),
-                              i.CodigoTarea,
-                              Origen        = RTRIM(i.Origen),
-                              FuenteFinanc  = RTRIM(i.FuenteFinanc),
-                              TipoUso       = RTRIM(i.TipoUso),
                               r.RefSecCuadro, r.RefSecItem,
                               r.CantidadAno0, r.CantidadAno1, r.CantidadAno2, r.CantidadAno3,
                               r.MontoAno0, r.MontoAno1, r.MontoAno2, r.MontoAno3,
@@ -749,7 +679,6 @@ BEGIN
                                    ORDER BY p.AnoOffset, p.Mes
                                      FOR JSON PATH), '[]'))
                          FROM cmn.vwItemResumen AS r
-                         JOIN cmn.SolicitudItem AS i ON i.IdSolicitudItem = r.IdSolicitudItem
                         WHERE r.IdSolicitud = s.IdSolicitud
                         ORDER BY r.Orden
                           FOR JSON PATH), '[]')),

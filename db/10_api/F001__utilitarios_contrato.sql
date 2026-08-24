@@ -351,14 +351,22 @@ BEGIN
                 @SecEjec     int,
                 @CentroCosto varchar(15),
                 @Texto       varchar(200),
-                @Limite      int;
+                @Limite      int,
+                @TipoMovimiento varchar(20),
+                @SecFunc     int,
+                @Origen      varchar(1),
+                @FuenteFinanc varchar(2);
 
         SELECT @Maestro     = Maestro,
                @AnoEje      = AnoEje,
                @SecEjec     = SecEjec,
                @CentroCosto = CentroCosto,
                @Texto       = Texto,
-               @Limite      = Limite
+               @Limite      = Limite,
+               @TipoMovimiento = UPPER(LTRIM(RTRIM(TipoMovimiento))),
+               @SecFunc     = SecFunc,
+               @Origen      = Origen,
+               @FuenteFinanc = FuenteFinanc
         FROM OPENJSON(@parametro)
         WITH (
             Maestro     varchar(40),
@@ -366,7 +374,11 @@ BEGIN
             SecEjec     int,
             CentroCosto varchar(15),
             Texto       varchar(200),
-            Limite      int
+            Limite      int,
+            TipoMovimiento varchar(20),
+            SecFunc     int,
+            Origen      varchar(1),
+            FuenteFinanc varchar(2)
         );
 
         IF NULLIF(LTRIM(RTRIM(@Maestro)), '') IS NULL
@@ -430,14 +442,30 @@ BEGIN
             /* El area usuaria busca por descripcion, nunca por codigo. Full-Text
                no esta instalado en la instancia; sobre las 5 239 filas del
                catalogo de la ejecutora un LIKE tarda 28 ms medidos. */
-            SET @Datos = (SELECT TOP (@Limite) CodigoItem, TipoBien, GrupoBien, ClaseBien,
-                                 FamiliaBien, ItemBien, Descripcion, UnidadMedida, PrecioRef, Activo
-                            FROM siga.vwCatalogoItem
-                           WHERE SecEjec = @SecEjec
-                             AND Activo = 1
-                             AND (@Texto IS NULL OR Descripcion LIKE '%' + @Texto + '%'
-                                                 OR CodigoItem  LIKE @Texto + '%')
-                           ORDER BY Descripcion
+            SET @Datos = (SELECT TOP (@Limite) c.CodigoItem, c.TipoBien, c.GrupoBien, c.ClaseBien,
+                                 c.FamiliaBien, c.ItemBien, c.Descripcion, c.UnidadMedida,
+                                 c.PrecioRef, c.Activo
+                            FROM siga.vwCatalogoItem AS c
+                           WHERE c.SecEjec = @SecEjec
+                             AND c.Activo = 1
+                             AND (@Texto IS NULL OR c.Descripcion LIKE '%' + @Texto + '%'
+                                                 OR c.CodigoItem  LIKE @Texto + '%')
+                             /* Una inclusion no debe ofrecer un item que ya esta
+                                vigente y con cantidades en el mismo centro. */
+                             AND (@CentroCosto IS NULL OR @TipoMovimiento IS NULL
+                                  OR @TipoMovimiento <> 'INCLUSION'
+                                  OR NOT EXISTS
+                                  (SELECT 1
+                                     FROM siga.vwCuadroVigenteItem AS v
+                                    WHERE v.AnoEje = @AnoEje AND v.SecEjec = @SecEjec
+                                      AND v.CentroCosto = @CentroCosto
+                                      AND v.TipoBien = c.TipoBien AND v.GrupoBien = c.GrupoBien
+                                      AND v.ClaseBien = c.ClaseBien AND v.FamiliaBien = c.FamiliaBien
+                                      AND v.ItemBien = c.ItemBien
+                                      AND v.FlagModificado = 0 AND v.FlagSolicitud = 0
+                                      AND v.MotivoSolicitud = '0' AND v.EstadoSiga IN ('C','I')
+                                      AND v.CantAno0 + v.CantAno1 + v.CantAno2 + v.CantAno3 > 0))
+                           ORDER BY c.Descripcion
                              FOR JSON PATH);
         END
 
@@ -447,16 +475,26 @@ BEGIN
                 THROW 51024, 'VALIDACION_PAYLOAD: CUADRO_VIGENTE exige CentroCosto.', 1;
             /* Es el listado del que el area usuaria elige que excluir o que
                modificar, en vez de transcribirlo a mano. */
-            SET @Datos = (SELECT TOP (@Limite) SecCuadro, SecItem, SecCuaModSal, CodigoItem =
-                                 CONCAT_WS('.', TipoBien, GrupoBien, ClaseBien, FamiliaBien, ItemBien),
-                                 TipoBien, GrupoBien, ClaseBien, FamiliaBien, ItemBien,
-                                 UnidadMedida, PrecioUnit, EstadoSiga, ProcedenciaDesc, MotivoDesc,
-                                 CantAno0, CantAno1, CantAno2, CantAno3,
-                                 TipoTarea, NivelTarea, CodigoTarea, SecFunc, Origen, FuenteFinanc,
-                                 Clasificador, TipoUso
-                            FROM siga.vwCuadroVigenteItem
-                           WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec AND CentroCosto = @CentroCosto
-                           ORDER BY SecItem
+            SET @Datos = (SELECT TOP (@Limite) v.SecCuadro, v.SecItem, v.SecCuaModSal, CodigoItem =
+                                 CONCAT_WS('.', v.TipoBien, v.GrupoBien, v.ClaseBien, v.FamiliaBien, v.ItemBien),
+                                 v.TipoBien, v.GrupoBien, v.ClaseBien, v.FamiliaBien, v.ItemBien,
+                                 v.UnidadMedida, v.PrecioUnit, v.EstadoSiga, v.ProcedenciaDesc, v.MotivoDesc,
+                                 v.CantAno0, v.CantAno1, v.CantAno2, v.CantAno3,
+                                 v.TipoTarea, v.NivelTarea, v.CodigoTarea, v.SecFunc, v.Origen, v.FuenteFinanc,
+                                 v.Clasificador, v.TipoUso, c.Descripcion, CatalogoActivo = c.Activo
+                            FROM siga.vwCuadroVigenteItem AS v
+                            JOIN siga.vwCatalogoItem AS c
+                              ON c.SecEjec = v.SecEjec AND c.TipoBien = v.TipoBien
+                             AND c.GrupoBien = v.GrupoBien AND c.ClaseBien = v.ClaseBien
+                             AND c.FamiliaBien = v.FamiliaBien AND c.ItemBien = v.ItemBien
+                           WHERE v.AnoEje = @AnoEje AND v.SecEjec = @SecEjec
+                             AND v.CentroCosto = @CentroCosto AND c.Activo = 1
+                             AND v.FlagModificado = 0 AND v.FlagSolicitud = 0
+                             AND v.MotivoSolicitud = '0' AND v.EstadoSiga IN ('C','I')
+                             AND v.CantAno0 + v.CantAno1 + v.CantAno2 + v.CantAno3 > 0
+                             AND (@Texto IS NULL OR c.Descripcion LIKE '%' + @Texto + '%'
+                                                 OR c.CodigoItem LIKE @Texto + '%')
+                           ORDER BY v.SecItem
                              FOR JSON PATH);
         END
 
@@ -471,7 +509,8 @@ BEGIN
                2026 PPTO_ANNO_01..03 esta en cero en las 2 375 filas. Por eso se
                devuelve MontoProg1..3, que es lo programado, y no un techo que no
                existe. Ver la nota en siga.vwTechoPresupuesto. */
-            SET @Datos = (SELECT TOP (@Limite) Secuencia, CentroCosto, FaseCuadro, SecFunc, SecFuncProp,
+            SET @Datos = (SELECT TOP (@Limite) Secuencia, CentroCosto, FaseCuadro,
+                                 TipoTarea, NivelTarea, CodigoTarea, SecFunc, SecFuncProp,
                                  Origen, FuenteFinanc, Clasificador,
                                  MontoTecho0, MontoUsado0,
                                  MontoDisponible0 = MontoTecho0 - MontoUsado0,
@@ -480,6 +519,10 @@ BEGIN
                            WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
                              AND CentroCosto IS NOT NULL
                              AND (@CentroCosto IS NULL OR CentroCosto = @CentroCosto)
+                             AND (@SecFunc IS NULL OR SecFunc = @SecFunc)
+                             AND (@Origen IS NULL OR Origen = @Origen)
+                             AND (@FuenteFinanc IS NULL OR FuenteFinanc = @FuenteFinanc)
+                             AND NULLIF(LTRIM(RTRIM(Clasificador)), '') IS NOT NULL
                            ORDER BY CentroCosto, Clasificador
                              FOR JSON PATH);
         END

@@ -1,4 +1,4 @@
-/*
+﻿/*
 ===============================================================================
   SIGCM - S900 : Datos de prueba
   Motor  : SQL Server 2022 (compat 160)
@@ -219,9 +219,6 @@ DECLARE @Asignacion TABLE (Cuenta varchar(120), CodigoRol varchar(40),
   multiple no se puede probar con una. Hacen falta al menos dos oficinas con sus
   propios Anexos 3 para que el especialista marque items de origenes distintos y
   se vea que cada uno vuelve a su area al final.
-
-  Las cuentas AREA_COORDINADOR de area usuaria se conservan por compatibilidad
-  de login, pero ya no tienen modulo CMN: el flujo AU es especialista <-> jefe.
 */
 INSERT INTO @Asignacion VALUES
   ('prueba.especialista', 'AREA_ESPECIALISTA',  'UO-PRUEBA', 0),

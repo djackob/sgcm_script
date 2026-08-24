@@ -4,6 +4,10 @@ Serie de scripts que construye `DBSIGCM`, la base del Sistema Integrado de
 Gestión de Contrataciones Menores del ANIN. Es la **fuente de verdad** del
 esquema: si un objeto no está aquí, no existe.
 
+> **¿Primera vez en el proyecto?** El punto de entrada no es este archivo, es
+> [`LEEME.md`](LEEME.md): trae el prompt de arranque, el mapa de los cuatro
+> bloques y las reglas. Este README cubre sólo la base de datos.
+
 ## Regla número uno
 
 La línea base es **SQL Server 2022, compatibilidad 160**. No es una preferencia:
@@ -96,8 +100,8 @@ Cuando la serie y un volcado discrepan, manda la serie y el entorno se reinstala
   corre dentro de `SIGA_1750` y hace el `INSERT`. Está entregado al ANIN para
   revisión y todavía no instalado en desarrollo ni en producción. Hasta que lo
   esté, `W001` solo puede correr en simulación. Es un trámite, no código.
-- **`W001` solo implementa `INCLUIR_ITEM`.** `EXCLUIR_ITEM`,
-  `MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` devuelven un error explícito.
+- **`W001` implementa `INCLUIR_ITEM` y `EXCLUIR_ITEM`.**
+  `MODIFICAR_CANTIDADES` y `CONSOLIDAR_CMN` todavía devuelven un error explícito.
 - **El worker de integración está implementado en el backend.** Se despliega
   apagado y en simulación por defecto; cada ambiente debe habilitarlo de forma
   explícita. Usa `sp_getapplock` para que una sola réplica drene la cola y llama
@@ -114,3 +118,10 @@ Probado de punta a punta en local el 2026-08-18, contra la copia restaurada de
 `CMN_VALIDAR_UA`, encolado y drenaje en modo real. Escribió la cabecera 170 y su
 ítem en `SIG_CUADRO_NECESIDAD` / `_DET` (`CANT_03 = 40`, `MNTO_TOTAL = 500.00`) y
 dejó la correspondencia en `integracion.MapeoCmn`.
+
+La exclusión se verificó el 2026-08-19 sobre el ítem `01.01 / 1 / 1`: W001 dejó
+la operación `COMPLETADO`, creó el mapeo con estado `E`, conservó las cantidades
+en `SIG_CUADRO_MODIFICADO_DET_ORI`, creó la solicitud SIGA 442 en estado `2`
+(V.B. Jefe) con sus cuatro detalles anuales y actualizó las filas 2026–2029 de
+`SIG_CUADRO_MODIFICADO_DET`. Una segunda ejecución recuperó la misma solicitud
+442 sin duplicar cabeceras, detalles ni estados documentales.

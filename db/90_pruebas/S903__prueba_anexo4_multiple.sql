@@ -243,12 +243,15 @@ DECLARE @Paso TABLE (o int IDENTITY(1,1), quien varchar(10), codigo varchar(70),
 INSERT INTO @Paso (quien, codigo, firma, extra) VALUES
     ('ESP',   'CMN_GENERAR_A3',            0, NULL),
     ('JEFE',  'CMN_FIRMAR_A3',             1, NULL),
+    ('JEFE',  'CMN_ENVIAR_OA',             0, NULL),
     ('OA',    'CMN_OA_DERIVAR',            0, NULL),
     ('ABJE',  'CMN_ABAST_JEFE_DERIVAR',    0, NULL),
     ('ABCO',  'CMN_ABAST_COORD_DERIVAR',   0, NULL),
     /* URGENTE a proposito: si fuera ORDINARIA, la prueba solo pasaria los
        viernes. La regla del viernes se comprueba aparte, mas abajo. */
-    ('ABES',  'CMN_ABAST_ESP_FIRMAR_A3',   0, N',"TipoInclusion":"URGENTE"');
+    ('ABES',  'CMN_ABAST_ESP_FIRMAR_A3',   1, N',"TipoInclusion":"URGENTE"'),
+    ('ABCO',  'CMN_ABAST_COORD_FIRMAR_A3', 1, NULL),
+    ('ABJE',  'CMN_ABAST_JEFE_FIRMAR_A3',  1, NULL);
 
 DECLARE @o int, @quien varchar(10), @codTr varchar(70), @firmaPaso bit, @extraPaso nvarchar(100);
 DECLARE @actor nvarchar(400), @totPaso int = (SELECT COUNT(*) FROM @Paso);
@@ -297,11 +300,18 @@ BEGIN
             IF JSON_VALUE(@j,'$.estado') <> '1'
             BEGIN PRINT ' FALLO firma A3 (' + @codTr + ') en ' + @Codigo + ': ' + @j; EXEC #LimpiarS903; RETURN; END
 
-            /* AREA_JEFE es el unico firmante del Anexo 3. */
-            IF @codTr = 'CMN_FIRMAR_A3' AND JSON_VALUE(@j,'$.EstadoDocumento') <> 'FIRMADO'
+            /* La comprobacion central de la firma en cadena: hasta la ultima, la
+               version tiene que quedar PARCIAL y no FIRMADO. */
+            IF @codTr = 'CMN_ABAST_JEFE_FIRMAR_A3' AND JSON_VALUE(@j,'$.EstadoDocumento') <> 'FIRMADO'
             BEGIN
-                PRINT '  [FALLA] Con la firma del jefe del area usuaria el Anexo 3 deberia quedar FIRMADO y quedo '
+                PRINT '  [FALLA] Con las cuatro firmas el Anexo 3 deberia quedar FIRMADO y quedo '
                     + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'NULL');
+                SET @fallas = @fallas + 1;
+            END
+            IF @codTr <> 'CMN_ABAST_JEFE_FIRMAR_A3' AND JSON_VALUE(@j,'$.EstadoDocumento') <> 'PARCIAL'
+            BEGIN
+                PRINT '  [FALLA] Con firmas pendientes el Anexo 3 deberia quedar PARCIAL y quedo '
+                    + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'NULL') + ' tras ' + @codTr;
                 SET @fallas = @fallas + 1;
             END
         END
@@ -317,14 +327,14 @@ BEGIN
 
         SET @Version = CONVERT(int, JSON_VALUE(@j,'$.Version'));
 
-        IF @codTr = 'CMN_ABAST_ESP_FIRMAR_A3'
+        IF @codTr = 'CMN_ABAST_JEFE_FIRMAR_A3'
             SET @encoladasA3 = @encoladasA3 + CONVERT(int, ISNULL(JSON_VALUE(@j,'$.OperacionesEncoladas'),'0'));
 
         SET @o = @o + 1;
     END
 
     UPDATE @Area SET Version = @Version WHERE n = @n;
-    PRINT '  ' + @Codigo + ' llego a CMN_A3_APROBADO con la conformidad del especialista.';
+    PRINT '  ' + @Codigo + ' llego a CMN_A3_APROBADO con sus cuatro firmas.';
 
     SET @n = @n + 1;
 END
@@ -497,41 +507,37 @@ ELSE
     PRINT '  OK - Un solo documento Anexo 4, marcado consolidado y enlazado a los 2 expedientes.';
 
 /* -------------------------------------------------------------------------- */
-/* 6. Elevacion del Anexo 4 y firma del jefe en lote                           */
+/* 6. Las tres firmas del Anexo 4 y el movimiento en lote                      */
 /* -------------------------------------------------------------------------- */
 
 DECLARE @Lote nvarchar(max) =
     N'[{"IdExpediente":"' + @IdExpA + N'","Version":' + CONVERT(varchar(10), @VerA) + N'},'
   + N' {"IdExpediente":"' + @IdExpB + N'","Version":' + CONVERT(varchar(10), @VerB) + N'}]';
 
-DECLARE @F4 TABLE (o int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(20), firma bit);
-INSERT INTO @F4 (actor, codigo, etiqueta, firma) VALUES
-    (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista', 0),
-    (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe',         1);
+DECLARE @F4 TABLE (o int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(20));
+INSERT INTO @F4 (actor, codigo, etiqueta) VALUES
+    (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista'),
+    (@ActorAbCo, 'CMN_ABAST_COORD_FIRMAR_A4', 'coordinador'),
+    (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe');
 
 DECLARE @etiqueta varchar(20), @encoladasA4 int = 0, @movidos int = 0;
 SET @o = 1; SET @totPaso = (SELECT COUNT(*) FROM @F4);
 
 WHILE @o <= @totPaso
 BEGIN
-    SELECT @actor = actor, @codTr = codigo, @etiqueta = etiqueta, @firmaPaso = firma FROM @F4 WHERE o = @o;
+    SELECT @actor = actor, @codTr = codigo, @etiqueta = etiqueta FROM @F4 WHERE o = @o;
 
-    IF @firmaPaso = 1
-    BEGIN
-        /* Se firma por UN expediente: el documento es uno solo y la rutina lo
-           encuentra por cualquiera de sus enlaces. */
-        SET @p = N'{' + @actor + N',"IdExpediente":"' + @IdExpA + N'",
-          "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S903-A4-' + @etiqueta + N'"}';
-        DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
-        SELECT @j = j FROM @r;
-        IF JSON_VALUE(@j,'$.estado') <> '1'
-        BEGIN PRINT ' FALLO firma A4 (' + @etiqueta + '): ' + @j; EXEC #LimpiarS903; RETURN; END
+    /* Se firma por UN expediente: el documento es uno solo y la rutina lo
+       encuentra por cualquiera de sus enlaces. */
+    SET @p = N'{' + @actor + N',"IdExpediente":"' + @IdExpA + N'",
+      "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S903-A4-' + @etiqueta + N'"}';
+    DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
+    SELECT @j = j FROM @r;
+    IF JSON_VALUE(@j,'$.estado') <> '1'
+    BEGIN PRINT ' FALLO firma A4 (' + @etiqueta + '): ' + @j; EXEC #LimpiarS903; RETURN; END
 
-        PRINT '  Firma del ' + @etiqueta + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
-            + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
-    END
-    ELSE
-        PRINT '  ' + @etiqueta + ' eleva el Anexo 4 sin firmar.';
+    PRINT '  Firma del ' + @etiqueta + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
+        + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
 
     /* La transicion, sobre los DOS expedientes a la vez. */
     SET @p = N'{' + @actor + N',"IdExpedientes":' + @Lote

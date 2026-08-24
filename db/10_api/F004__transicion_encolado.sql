@@ -116,54 +116,18 @@ BEGIN
         IF @CodigoEstado IS NULL
             THROW 51202, 'NO_ENCONTRADO: el expediente no existe o esta anulado.', 1;
 
-        /* El destino de CMN_SUBS_JEFE_ENVIAR no esta cableado: lo que observa OA
-           vuelve a OA; lo que observa Abastecimiento entra por el jefe de
-           Abastecimiento, sin pasar por Administracion. Se lee de la observacion
-           abierta (CodigoEstadoRetorno). */
-        DECLARE @RetornoObs varchar(60);
-        SELECT TOP 1 @RetornoObs = o.CodigoEstadoRetorno
-          FROM sigcm.Observacion AS o
-         WHERE o.IdExpediente = @IdExpediente AND o.Activo = 1
-           AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
-         ORDER BY o.FechaCreacionAuditoria DESC;
-
-        DECLARE @DestinoSubs varchar(60) =
-            CASE
-                WHEN @RetornoObs = 'CMN_EN_EVAL_OA' THEN 'CMN_EN_EVAL_OA'
-                WHEN @RetornoObs LIKE 'CMN_EN_ABAST%' THEN 'CMN_EN_ABAST_JEFE'
-                ELSE NULL
-            END;
-
         SELECT @resultado = (
             SELECT 1 AS estado,
                    @IdExpediente AS IdExpediente,
                    @CodigoEstado AS CodigoEstadoActual,
                    @Version      AS Version,
                    Transiciones = JSON_QUERY(COALESCE((
-                       SELECT t.CodigoTransicion,
-                              NombreAccion = CASE
-                                  WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                       AND @DestinoSubs = 'CMN_EN_EVAL_OA'
-                                      THEN 'Firmar y remitir subsanado a OA'
-                                  ELSE t.NombreAccion
-                              END,
-                              CodigoEstadoDestino = CASE
-                                  WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                       AND @DestinoSubs IS NOT NULL
-                                      THEN @DestinoSubs
-                                  ELSE t.CodigoEstadoDestino
-                              END,
+                       SELECT t.CodigoTransicion, t.NombreAccion, t.CodigoEstadoDestino,
                               EstadoDestino = d.Nombre,
                               t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
                               t.EncolaIntegracion, t.GeneraObservacion
                          FROM sigcm.Transicion AS t
-                         JOIN sigcm.Estado     AS d ON d.CodigoEstado =
-                              CASE
-                                  WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                       AND @DestinoSubs IS NOT NULL
-                                      THEN @DestinoSubs
-                                  ELSE t.CodigoEstadoDestino
-                              END
+                         JOIN sigcm.Estado     AS d ON d.CodigoEstado = t.CodigoEstadoDestino
                         WHERE t.CodigoModulo = @CodigoModulo
                           AND t.CodigoEstadoOrigen = @CodigoEstado
                           AND t.Activo = 1
@@ -513,9 +477,7 @@ BEGIN
                 @VersionExp int, @VersionNuevaExp int,
                 @UnidadOrigenExp uniqueidentifier, @UnidadActualExp uniqueidentifier,
                 @IdUnidadDestinoExp uniqueidentifier, @CodigoExpLoop varchar(40),
-                @VersionNueva int = @VersionActual + 1,
-                @EstadoDestinoExp varchar(60), @RetornoObsExp varchar(60),
-                @CandidatasExp int;
+                @VersionNueva int = @VersionActual + 1;
 
         WHILE @Idx <= @CantidadLote
         BEGIN
@@ -529,82 +491,6 @@ BEGIN
              WHERE e.IdExpediente = @IdExpLoop;
 
             SET @VersionNuevaExp = @VersionExp + 1;
-
-            /* Destino por defecto de la transicion. En el retorno de una
-               subsanacion se sustituye por CodigoEstadoRetorno: OA vuelve a OA;
-               Abastecimiento entra por el jefe y no pasa por Administracion. */
-            SET @EstadoDestinoExp = @EstadoDestino;
-            SET @RetornoObsExp = NULL;
-
-            IF @CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-            BEGIN
-                SELECT TOP 1 @RetornoObsExp = o.CodigoEstadoRetorno
-                  FROM sigcm.Observacion AS o
-                 WHERE o.IdExpediente = @IdExpLoop AND o.Activo = 1
-                   AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
-                 ORDER BY o.FechaCreacionAuditoria DESC;
-
-                SET @EstadoDestinoExp =
-                    CASE
-                        WHEN @RetornoObsExp = 'CMN_EN_EVAL_OA' THEN 'CMN_EN_EVAL_OA'
-                        ELSE 'CMN_EN_ABAST_JEFE'
-                    END;
-
-                UPDATE o
-                   SET o.Estado = 'CERRADA',
-                       o.CerradaEn = @Ahora,
-                       o.RecepcionadaEn = COALESCE(o.RecepcionadaEn, o.SubsanadaEn, @Ahora),
-                       o.IdRecepcionadaPor = COALESCE(o.IdRecepcionadaPor, o.IdSubsanadaPor, @IdUsuario),
-                       o.SubsanadaEn = COALESCE(o.SubsanadaEn, @Ahora),
-                       o.IdSubsanadaPor = COALESCE(o.IdSubsanadaPor, @IdUsuario),
-                       o.UsuarioModificacionAuditoria = @Cuenta,
-                       o.FechaModificacionAuditoria = @Ahora,
-                       o.EquipoModificacionAuditoria = @Equipo,
-                       o.ProgramaModificacionAuditoria = @Programa
-                  FROM sigcm.Observacion AS o
-                 WHERE o.IdExpediente = @IdExpLoop AND o.Activo = 1
-                   AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA');
-            END
-
-            /* No hay un paso aparte de recepcion en AU: el especialista levanta
-               la observacion sobre el mismo expediente. CK_Observacion_Recepcion
-               exige RecepcionadaEn en cuanto el estado deja de ser PENDIENTE. */
-            IF @CodigoTransicion = 'CMN_SUBSANAR'
-            BEGIN
-                UPDATE o
-                   SET o.Estado = 'SUBSANADA',
-                       o.RecepcionadaEn = COALESCE(o.RecepcionadaEn, @Ahora),
-                       o.IdRecepcionadaPor = COALESCE(o.IdRecepcionadaPor, @IdUsuario),
-                       o.SubsanadaEn = @Ahora,
-                       o.IdSubsanadaPor = @IdUsuario,
-                       o.Respuesta = COALESCE(NULLIF(LTRIM(RTRIM(@Comentario)), ''), o.Respuesta),
-                       o.UsuarioModificacionAuditoria = @Cuenta,
-                       o.FechaModificacionAuditoria = @Ahora,
-                       o.EquipoModificacionAuditoria = @Equipo,
-                       o.ProgramaModificacionAuditoria = @Programa
-                  FROM sigcm.Observacion AS o
-                 WHERE o.IdExpediente = @IdExpLoop AND o.Activo = 1
-                   AND o.Estado IN ('PENDIENTE','RECEPCIONADA');
-            END
-
-            SELECT @RolDestino = RolResponsable
-              FROM sigcm.Estado
-             WHERE CodigoEstado = @EstadoDestinoExp;
-
-            SET @UnidadUnicaRol = NULL;
-            IF @IdUnidadDestino IS NULL AND @RolDestino IS NOT NULL
-            BEGIN
-                SELECT @CandidatasExp = COUNT(DISTINCT ur.IdUnidad)
-                  FROM sigcm.UsuarioRol AS ur
-                 WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1
-                   AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
-
-                IF @CandidatasExp = 1
-                    SELECT @UnidadUnicaRol = MIN(ur.IdUnidad)
-                      FROM sigcm.UsuarioRol AS ur
-                     WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1
-                       AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
-            END
 
             /* Regla 2 del enrutamiento, evaluada con la unidad de ESTE expediente. */
             SET @IdUnidadDestinoExp = @IdUnidadDestino;
@@ -623,7 +509,7 @@ BEGIN
                si otro proceso avanzo el expediente entre la lectura y este UPDATE,
                no se afecta ninguna fila. */
             UPDATE sigcm.Expediente
-               SET CodigoEstado                  = @EstadoDestinoExp,
+               SET CodigoEstado                  = @EstadoDestino,
                    Version                       = @VersionNuevaExp,
                    IdUnidadActual                = @IdUnidadDestinoExp,
                    /* El responsable concreto se deja sin fijar: la bandeja se
@@ -653,7 +539,7 @@ BEGIN
                  Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
                  UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
             VALUES
-                (@IdExpLoop, @EstadoActual, @EstadoDestinoExp, @CodigoTransicion,
+                (@IdExpLoop, @EstadoActual, @EstadoDestino, @CodigoTransicion,
                  @Comentario, @IdUsuario, @CodigoRol, @IdUnidad,
                  CASE WHEN ISJSON(@Datos) = 1 THEN @Datos ELSE N'{}' END,
                  @Cuenta, @Equipo, @Programa);
@@ -664,24 +550,18 @@ BEGIN
               al observarse. Ahi vive la regla del mockup: lo que observa OA
               vuelve a OA, lo que observa Abastecimiento vuelve a Abastecimiento.
               Es dato, no un condicional por unidad.
-
-              Un Anexo 3 puede observarse N veces en la misma instancia. La
-              observacion previa se cierra y se abre una nueva; no se rechaza.
             */
             IF @GeneraObservacion = 1
             BEGIN
-                UPDATE o
-                   SET o.Estado = 'CERRADA',
-                       o.CerradaEn = COALESCE(o.CerradaEn, @Ahora),
-                       o.RecepcionadaEn = COALESCE(o.RecepcionadaEn, o.SubsanadaEn, @Ahora),
-                       o.IdRecepcionadaPor = COALESCE(o.IdRecepcionadaPor, o.IdSubsanadaPor, @IdUsuario),
-                       o.UsuarioModificacionAuditoria = @Cuenta,
-                       o.FechaModificacionAuditoria = @Ahora,
-                       o.EquipoModificacionAuditoria = @Equipo,
-                       o.ProgramaModificacionAuditoria = @Programa
-                  FROM sigcm.Observacion AS o
-                 WHERE o.IdExpediente = @IdExpLoop AND o.Activo = 1
-                   AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA');
+                IF EXISTS (SELECT 1 FROM sigcm.Observacion
+                            WHERE IdExpediente = @IdExpLoop
+                              AND Estado IN ('PENDIENTE','RECEPCIONADA') AND Activo = 1)
+                BEGIN
+                    DECLARE @errObs nvarchar(400) = CONCAT(
+                        'CONFLICTO_OBSERVACION: el expediente ', @CodigoExpLoop,
+                        ' ya tiene una observacion abierta.');
+                    THROW 51220, @errObs, 1;
+                END
 
                 DECLARE @Obs TABLE (IdObservacion uniqueidentifier);
                 DELETE FROM @Obs;
@@ -700,7 +580,6 @@ BEGIN
                 SELECT @IdObservacion = IdObservacion FROM @Obs;
             END
 
-            SET @EstadoDestino = @EstadoDestinoExp;
             SET @Idx = @Idx + 1;
         END
 

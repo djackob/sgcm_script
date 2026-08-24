@@ -1,8 +1,21 @@
-/*
+﻿/*
 ===============================================================================
   SIGCM - W001 : Escritor del cuadro modificado de SIGA
   Motor  : SQL Server 2022 (compat 160)
   Ambito : [DBSIGCM]
+
+  ---------------------------------------------------------------------------
+  POR QUE CAMBIO ESTE ARCHIVO
+  ---------------------------------------------------------------------------
+  La version de este archivo commiteada en e415170 solo implementaba
+  INCLUIR_ITEM. El soporte de EXCLUIR_ITEM se escribio directamente contra
+  DBSIGCM y nunca se volco a disco: el 2026-08-19 el procedimiento instalado
+  tenia 21 738 caracteres y este archivo generaba uno mucho mas corto. Este
+  archivo recupera la version instalada y le agrega el sinonimo de exclusion,
+  que la seccion 1 anterior no creaba.
+
+  Reglas para que no vuelva a pasar: el fuente es este archivo, no la base. Si
+  hay que cambiar el procedimiento, se cambia aqui y se reejecuta.
 
   ---------------------------------------------------------------------------
   QUE HACE
@@ -33,6 +46,29 @@
   El pivote de los 48 periodos a 4 filas de 12 columnas es el corazon de este
   script: es literalmente donde el modelo del SIGCM se convierte en el modelo
   del producto SIGA.
+
+  ---------------------------------------------------------------------------
+  OPERACIONES SOPORTADAS
+  ---------------------------------------------------------------------------
+      INCLUIR_ITEM          -> siga.usp_ext_registrar_item_cmn
+      EXCLUIR_ITEM          -> siga.usp_ext_excluir_item_cmn
+      MODIFICAR_CANTIDADES  -> pendiente
+      CONSOLIDAR_CMN        -> pendiente
+
+  EXCLUIR_ITEM no busca el item: lo recibe. El RequestJson debe traer
+  RefSecCuadro y RefSecItem, que son el SEC_CUADRO y el SEC_ITEM que SIGA
+  asigno cuando el item entro al cuadro. Sin esa referencia no hay exclusion
+  posible, porque la clave de SIGA no se puede derivar de la del SIGCM.
+
+  ---------------------------------------------------------------------------
+  ADVERTENCIA SOBRE LA RUTA DE ESCRITURA DE INCLUIR_ITEM
+  ---------------------------------------------------------------------------
+  usp_ext_registrar_item_cmn escribe en SIG_CUADRO_NECESIDAD, que es la ruta de
+  FORMULACION del cuadro. La ruta de MODIFICACION -la que el ADR-002 fija como
+  alcance del MVP y la que usa usp_ext_excluir_item_cmn- es
+  SIG_CUADRO_MODIFICADO. Las dos operaciones de este escritor no escriben hoy
+  en el mismo sitio. Ver el analisis en
+  C:\SIGA_MEF\integracion\ANALISIS_CMN.md, seccion "Los dos cuadros".
 
   ---------------------------------------------------------------------------
   MODO SIMULACION (ADR-003)
@@ -69,7 +105,7 @@ SET QUOTED_IDENTIFIER ON;
 GO
 
 /* -------------------------------------------------------------------------- */
-/* 1. Sinonimo hacia el procedimiento de SIGA                                 */
+/* 1. Sinonimos hacia los procedimientos de SIGA                              */
 /* -------------------------------------------------------------------------- */
 
 /*
@@ -77,9 +113,8 @@ GO
   ya creo C003. Asi este script funciona igual en local, en desarrollo y en
   produccion, donde la base puede llamarse distinto.
 
-  El procedimiento usp_ext_registrar_item_cmn es de SIGA y esta entregado para
-  homologacion. Mientras el ANIN no lo instale, el sinonimo no se puede crear y
-  el modo real no esta disponible; el modo simulacion si.
+  Son dos procedimientos, uno por operacion. Cada uno se enlaza solo si existe;
+  la falta de uno no impide instalar el otro ni bloquea el modo simulacion.
 */
 
 DECLARE @bdSiga sysname;
@@ -94,28 +129,54 @@ BEGIN
 END
 ELSE
 BEGIN
-    DECLARE @existeProc bit = 0;
-    DECLARE @sql nvarchar(max) =
-        N'SELECT @r = COUNT(*) FROM ' + QUOTENAME(@bdSiga) + N'.sys.procedures
-           WHERE name = ''usp_ext_registrar_item_cmn'';';
-    EXEC sys.sp_executesql @sql, N'@r bit OUTPUT', @r = @existeProc OUTPUT;
+    DECLARE @procs TABLE (nombre sysname NOT NULL PRIMARY KEY);
+    INSERT INTO @procs (nombre)
+    VALUES (N'usp_ext_incluir_item_cmn'),
+           (N'usp_ext_excluir_item_cmn'),
+           (N'usp_ext_aprobar_solicitud_cmn'),
+           /* Queda enlazado por compatibilidad, pero W001 ya no lo invoca:
+              escribe en la ruta de formulacion, que esta cerrada. */
+           (N'usp_ext_registrar_item_cmn');
 
-    IF EXISTS (SELECT 1 FROM sys.synonyms
-                WHERE name = N'usp_ext_registrar_item_cmn'
-                  AND SCHEMA_NAME(schema_id) = N'siga')
-        DROP SYNONYM siga.usp_ext_registrar_item_cmn;
+    DECLARE @nombre sysname, @existe bit, @sql nvarchar(max);
 
-    IF @existeProc = 1
+    DECLARE curProcs CURSOR LOCAL FAST_FORWARD FOR
+        SELECT nombre FROM @procs ORDER BY nombre;
+
+    OPEN curProcs;
+    FETCH NEXT FROM curProcs INTO @nombre;
+
+    WHILE @@FETCH_STATUS = 0
     BEGIN
-        SET @sql = N'CREATE SYNONYM siga.usp_ext_registrar_item_cmn FOR '
-                 + QUOTENAME(@bdSiga) + N'.dbo.usp_ext_registrar_item_cmn;';
-        EXEC sys.sp_executesql @sql;
-        PRINT '  Sinonimo creado hacia ' + @bdSiga + '.dbo.usp_ext_registrar_item_cmn';
+        SET @existe = 0;
+        SET @sql = N'SELECT @r = COUNT(*) FROM ' + QUOTENAME(@bdSiga)
+                 + N'.sys.procedures WHERE name = @n;';
+        EXEC sys.sp_executesql @sql, N'@r bit OUTPUT, @n sysname',
+             @r = @existe OUTPUT, @n = @nombre;
+
+        IF EXISTS (SELECT 1 FROM sys.synonyms
+                    WHERE name = @nombre AND SCHEMA_NAME(schema_id) = N'siga')
+        BEGIN
+            SET @sql = N'DROP SYNONYM siga.' + QUOTENAME(@nombre) + N';';
+            EXEC sys.sp_executesql @sql;
+        END
+
+        IF @existe = 1
+        BEGIN
+            SET @sql = N'CREATE SYNONYM siga.' + QUOTENAME(@nombre) + N' FOR '
+                     + QUOTENAME(@bdSiga) + N'.dbo.' + QUOTENAME(@nombre) + N';';
+            EXEC sys.sp_executesql @sql;
+            PRINT '  Sinonimo creado hacia ' + @bdSiga + '.dbo.' + @nombre;
+        END
+        ELSE
+            PRINT '  [AVISO] ' + @bdSiga + ' no tiene ' + @nombre
+                + '. Esa operacion solo queda disponible en modo simulacion.';
+
+        FETCH NEXT FROM curProcs INTO @nombre;
     END
-    ELSE
-        PRINT '  [AVISO] ' + @bdSiga + ' no tiene usp_ext_registrar_item_cmn. '
-            + 'Solo queda disponible el modo simulacion, que es lo esperado '
-            + 'mientras el procedimiento no este homologado.';
+
+    CLOSE curProcs;
+    DEALLOCATE curProcs;
 END
 GO
 
@@ -166,21 +227,22 @@ BEGIN
         IF @Modo NOT IN ('simulacion', 'real')
             THROW 51301, 'VALIDACION_PAYLOAD: Modo debe ser "simulacion" o "real".', 1;
 
-        /* El modo real exige que exista el procedimiento del lado de SIGA. */
-        DECLARE @haySinonimo bit =
+        /* Cada operacion comprueba su propio procedimiento homologado. */
+        DECLARE @haySinonimoInclusion bit =
             CASE WHEN EXISTS (SELECT 1 FROM sys.synonyms
-                               WHERE name = N'usp_ext_registrar_item_cmn'
+                               WHERE name = N'usp_ext_incluir_item_cmn'
                                  AND SCHEMA_NAME(schema_id) = N'siga')
                  THEN 1 ELSE 0 END;
-
-        /* THROW no admite expresiones en el mensaje: solo literal o variable. */
-        DECLARE @msgSinSinonimo nvarchar(400) =
-            N'INTEGRACION_NO_DISPONIBLE: no existe siga.usp_ext_registrar_item_cmn. '
-          + N'El procedimiento debe estar instalado y homologado en SIGA. '
-          + N'Reejecuta W001 despues de instalarlo, o usa el modo simulacion.';
-
-        IF @Modo = 'real' AND @haySinonimo = 0
-            THROW 51302, @msgSinSinonimo, 1;
+        DECLARE @haySinonimoExclusion bit =
+            CASE WHEN EXISTS (SELECT 1 FROM sys.synonyms
+                               WHERE name = N'usp_ext_excluir_item_cmn'
+                                 AND SCHEMA_NAME(schema_id) = N'siga')
+                 THEN 1 ELSE 0 END;
+        DECLARE @haySinonimoAprobacion bit =
+            CASE WHEN EXISTS (SELECT 1 FROM sys.synonyms
+                               WHERE name = N'usp_ext_aprobar_solicitud_cmn'
+                                 AND SCHEMA_NAME(schema_id) = N'siga')
+                 THEN 1 ELSE 0 END;
 
         DECLARE @Ahora datetime = GETDATE();
 
@@ -256,7 +318,9 @@ BEGIN
                         @TipoUso varchar(1), @TipoBien varchar(1),
                         @GrupoBien varchar(2), @ClaseBien varchar(2),
                         @FamiliaBien varchar(4), @ItemBien varchar(4),
-                        @UnidadMedida numeric(3,0), @PrecioUnit numeric(16,6);
+                        @UnidadMedida numeric(3,0), @PrecioUnit numeric(16,6),
+                        @Comentario varchar(500),
+                        @RefSecCuadro numeric(10,0), @RefSecItem numeric(10,0);
 
                 SELECT @AnoEje         = j.AnoEje,
                        @SecEjec        = j.SecEjec,
@@ -279,7 +343,10 @@ BEGIN
                        @FamiliaBien    = j.FamiliaBien,
                        @ItemBien       = j.ItemBien,
                        @UnidadMedida   = j.UnidadMedida,
-                       @PrecioUnit     = j.PrecioUnitario
+                       @PrecioUnit     = j.PrecioUnitario,
+                       @Comentario     = j.Comentario,
+                       @RefSecCuadro   = j.RefSecCuadro,
+                       @RefSecItem     = j.RefSecItem
                   FROM OPENJSON(@req)
                   WITH (AnoEje numeric(4,0),         SecEjec numeric(6,0),
                         CentroCosto varchar(15),     TipoMovimiento varchar(20),
@@ -291,7 +358,9 @@ BEGIN
                         TipoUso varchar(1),          TipoBien varchar(1),
                         GrupoBien varchar(2),        ClaseBien varchar(2),
                         FamiliaBien varchar(4),      ItemBien varchar(4),
-                        UnidadMedida numeric(3,0),   PrecioUnitario numeric(16,6)) AS j;
+                        UnidadMedida numeric(3,0),   PrecioUnitario numeric(16,6),
+                        Comentario varchar(500),
+                        RefSecCuadro numeric(10,0),  RefSecItem numeric(10,0)) AS j;
 
                 /* ---- EL PIVOTE: 48 periodos JSON -> 4 filas XML ------- */
                 /*
@@ -328,42 +397,160 @@ BEGIN
                 DECLARE @modoReal  varchar(15)   = @Modo;
 
                 DECLARE @msgSinExpansion nvarchar(400) =
-                    N'OPERACION_SIN_EXPANSION: W001 solo implementa INCLUIR_ITEM. '
-                  + N'EXCLUIR_ITEM, MODIFICAR_CANTIDADES y CONSOLIDAR_CMN estan pendientes.';
+                    N'OPERACION_SIN_EXPANSION: W001 implementa INCLUIR_ITEM, '
+                  + N'EXCLUIR_ITEM y CONSOLIDAR_CMN. MODIFICAR_CANTIDADES esta pendiente.';
 
-                IF @op <> 'INCLUIR_ITEM'
+                IF @op NOT IN ('INCLUIR_ITEM','EXCLUIR_ITEM','CONSOLIDAR_CMN')
                     THROW 51303, @msgSinExpansion, 1;
+
+                DECLARE @msgSinSinonimo nvarchar(400);
+                IF @Modo='real' AND @op='INCLUIR_ITEM' AND @haySinonimoInclusion=0
+                BEGIN
+                    SET @msgSinSinonimo =
+                        N'INTEGRACION_NO_DISPONIBLE: falta siga.usp_ext_incluir_item_cmn. '
+                      + N'Instala el procedimiento de inclusion y reejecuta W001.';
+                    THROW 51302, @msgSinSinonimo, 1;
+                END
+
+                IF @Modo='real' AND @op='EXCLUIR_ITEM' AND @haySinonimoExclusion=0
+                BEGIN
+                    SET @msgSinSinonimo =
+                        N'INTEGRACION_NO_DISPONIBLE: falta siga.usp_ext_excluir_item_cmn. '
+                      + N'Instala el procedimiento de exclusion y reejecuta W001.';
+                    THROW 51302, @msgSinSinonimo, 1;
+                END
+
+                IF @Modo='real' AND @op='CONSOLIDAR_CMN' AND @haySinonimoAprobacion=0
+                BEGIN
+                    SET @msgSinSinonimo =
+                        N'INTEGRACION_NO_DISPONIBLE: falta siga.usp_ext_aprobar_solicitud_cmn. '
+                      + N'Instala el procedimiento de aprobacion y reejecuta W001.';
+                    THROW 51302, @msgSinSinonimo, 1;
+                END
+
+                IF @op='EXCLUIR_ITEM'
+                BEGIN
+                    SET @SecCuadro=@RefSecCuadro;
+                    SET @ItemSec=@RefSecItem;
+                END
+
+                DECLARE @SecSolicitud numeric(10,0) = NULL;
+                DECLARE @FilasExcluidas int;
+                DECLARE @FilasAprobadas int, @NroConsolid numeric(5,0);
+                DECLARE @solSiga numeric(10,0), @ccSiga varchar(15);
+                DECLARE @aprobadasTotal int = 0, @solicitudes int = 0;
 
                 IF @Modo = 'real'
                 BEGIN
-                    EXEC siga.usp_ext_registrar_item_cmn
-                         @AnoEje      = @AnoEje,
-                         @SecEjec     = @SecEjec,
-                         @CentroCosto = @CentroCosto,
-                         @FaseCuadro  = 5,
-                         @Secuencia   = @SecCuadro OUTPUT,
-                         @TipoTarea   = @TipoTarea,
-                         @NivelTarea  = @NivelTarea,
-                         @CodigoTarea = @CodigoTarea,
-                         @SecFunc     = @SecFunc,
-                         @SecFuncProp = @SecFuncProp,
-                         @Origen      = @Origen,
-                         @FuenteFinanc= @FuenteFinanc,
-                         @Clasificador= @Clasificador,
-                         @TipoRecurso = @TipoRecurso,
-                         @TipoPpto    = @TipoPpto,
-                         @TipoUso     = @TipoUso,
-                         @TipoBien    = @TipoBien,
-                         @GrupoBien   = @GrupoBien,
-                         @ClaseBien   = @ClaseBien,
-                         @FamiliaBien = @FamiliaBien,
-                         @ItemBien    = @ItemBien,
-                         @UnidadMedida= @UnidadMedida,
-                         @PrecioUnit  = @PrecioUnit,
-                         @Periodos    = @Periodos,
-                         @Usuario     = @Cuenta,
-                         @Equipo      = @Equipo,
-                         @ItemSec     = @ItemSec OUTPUT;
+                    /* ------------------------------------------------------
+                       CONSOLIDAR_CMN: es la firma del Anexo 4.
+                       No trae un item: trae la solicitud entera. Las claves de
+                       SIGA se recuperan de integracion.MapeoCmn, que es donde
+                       quedaron cuando se valido el Anexo 3. Una solicitud del
+                       SIGCM puede haber abierto mas de una solicitud en SIGA
+                       (una por centro de costo), asi que se recorren todas.
+                       ------------------------------------------------------ */
+                    IF @op = 'CONSOLIDAR_CMN'
+                    BEGIN
+                        DECLARE curSol CURSOR LOCAL FAST_FORWARD FOR
+                            SELECT DISTINCT
+                                   m.CentroCosto,
+                                   TRY_CONVERT(numeric(10,0),
+                                       JSON_VALUE(m.PayloadRespuesta, '$.SecSolicitud'))
+                              FROM integracion.MapeoCmn AS m
+                             WHERE m.IdSolicitud = @idSol
+                               AND JSON_VALUE(m.PayloadRespuesta, '$.SecSolicitud') IS NOT NULL;
+
+                        OPEN curSol;
+                        FETCH NEXT FROM curSol INTO @ccSiga, @solSiga;
+
+                        WHILE @@FETCH_STATUS = 0
+                        BEGIN
+                            SET @FilasAprobadas = 0;
+
+                            EXEC siga.usp_ext_aprobar_solicitud_cmn
+                                 @AnoEje       = @AnoEje,
+                                 @SecEjec      = @SecEjec,
+                                 @CentroCosto  = @ccSiga,
+                                 @SecSolicitud = @solSiga,
+                                 @Usuario      = @Cuenta,
+                                 @Equipo       = @Equipo,
+                                 @Glosa        = @Comentario,
+                                 @ItemsAprobados = @FilasAprobadas OUTPUT,
+                                 @NroConsolid    = @NroConsolid OUTPUT;
+
+                            SET @aprobadasTotal = @aprobadasTotal + ISNULL(@FilasAprobadas, 0);
+                            SET @solicitudes    = @solicitudes + 1;
+                            SET @SecSolicitud   = @solSiga;
+
+                            FETCH NEXT FROM curSol INTO @ccSiga, @solSiga;
+                        END
+
+                        CLOSE curSol;
+                        DEALLOCATE curSol;
+
+                        IF @solicitudes = 0
+                            THROW 51304, 'INTEGRACION_SIN_MAPEO: la solicitud no tiene items registrados en SIGA; valida el Anexo 3 antes de firmar el Anexo 4.', 1;
+
+                        /* El Anexo 4 aprueba lo que ya existe: al quedar
+                           MOTIVO_SOLICITUD en '0' el item pasa a ser pedible. */
+                        UPDATE integracion.MapeoCmn
+                           SET EstadoSiga = CASE WHEN EstadoSiga = 'E' THEN 'E' ELSE 'I' END,
+                               MotivoSolicitud = '0'
+                         WHERE IdSolicitud = @idSol;
+                    END
+                    ELSE IF @op='INCLUIR_ITEM'
+                    BEGIN
+                        /* Escribe en SIG_CUADRO_MODIFICADO, no en
+                           SIG_CUADRO_NECESIDAD: la ruta de formulacion esta
+                           cerrada desde enero y un item puesto ahi no llega al
+                           cuadro que el area usuaria ve hoy. */
+                        EXEC siga.usp_ext_incluir_item_cmn
+                             @AnoEje      = @AnoEje,
+                             @SecEjec     = @SecEjec,
+                             @CentroCosto = @CentroCosto,
+                             @TipoTarea   = @TipoTarea,
+                             @NivelTarea  = @NivelTarea,
+                             @CodigoTarea = @CodigoTarea,
+                             @SecFunc     = @SecFunc,
+                             @Origen      = @Origen,
+                             @FuenteFinanc= @FuenteFinanc,
+                             @Clasificador= @Clasificador,
+                             @TipoUso     = @TipoUso,
+                             @TipoBien    = @TipoBien,
+                             @GrupoBien   = @GrupoBien,
+                             @ClaseBien   = @ClaseBien,
+                             @FamiliaBien = @FamiliaBien,
+                             @ItemBien    = @ItemBien,
+                             @UnidadMedida= @UnidadMedida,
+                             @PrecioUnit  = @PrecioUnit,
+                             @Periodos    = @Periodos,
+                             @Usuario     = @Cuenta,
+                             @Equipo      = @Equipo,
+                             @Glosa       = @Comentario,
+                             @SecCuadro   = @SecCuadro OUTPUT,
+                             @SecItem     = @ItemSec OUTPUT,
+                             @SecSolicitud= @SecSolicitud OUTPUT;
+                    END
+                    ELSE
+                    BEGIN
+                        EXEC siga.usp_ext_excluir_item_cmn
+                             @AnoEje      = @AnoEje,
+                             @SecEjec     = @SecEjec,
+                             @CentroCosto = @CentroCosto,
+                             @SecCuadro   = @SecCuadro,
+                             @SecItem     = @ItemSec,
+                             @TipoBien    = @TipoBien,
+                             @GrupoBien   = @GrupoBien,
+                             @ClaseBien   = @ClaseBien,
+                             @FamiliaBien = @FamiliaBien,
+                             @ItemBien    = @ItemBien,
+                             @Usuario     = @Cuenta,
+                             @Equipo      = @Equipo,
+                             @Glosa       = @Comentario,
+                             @FilasActualizadas = @FilasExcluidas OUTPUT,
+                             @SecSolicitud = @SecSolicitud OUTPUT;
+                    END
 
                     /* Correspondencia de identificadores: sin esto no se puede
                        conciliar despues lo que quedo en SIGA con lo nuestro. */
@@ -373,18 +560,31 @@ BEGIN
                     BEGIN
                         /* MapeoCmn no lleva FechaCreacionAuditoria: la fecha del
                            asiento es RegistradoEnSiga, que es la que importa. */
+                        /* EstadoSiga es el ESTADO que quedo en
+                           SIG_CUADRO_MODIFICADO_DET: 'I' si se incluyo, 'E' si
+                           se excluyo. MotivoSolicitud guarda si la solicitud
+                           sigue abierta: '1' o '2' hasta que la firma del
+                           Anexo 4 lo lleve a '0'. Mientras no sea '0', SIGA no
+                           deja usar el item. */
                         INSERT INTO integracion.MapeoCmn
                             (IdSolicitudItem, IdSolicitud, AnoEje, SecEjec, CentroCosto,
-                             SecCuadro, SecItem, EstadoSiga, IdempotenciaKey,
-                             RegistradoEnSiga, PayloadRespuesta,
+                             SecCuadro, SecItem, EstadoSiga, MotivoSolicitud,
+                             IdempotenciaKey, RegistradoEnSiga, PayloadRespuesta,
                              UsuarioCreacionAuditoria,
                              EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
                         VALUES
                             (@idItem, @idSol, @AnoEje, @SecEjec, @CentroCosto,
-                             @SecCuadro, @ItemSec, '5', @clave,
+                             @SecCuadro, @ItemSec,
+                             CASE WHEN @op='EXCLUIR_ITEM' THEN 'E' ELSE 'I' END,
+                             CASE WHEN @op='EXCLUIR_ITEM' THEN '2' ELSE '1' END,
+                             @clave,
                              GETDATE(),
                              (SELECT SecCuadro = @SecCuadro, SecItem = @ItemSec,
-                                     Fase = 5, Estado = '5'
+                                     Operacion = @op,
+                                     SecSolicitud = @SecSolicitud,
+                                     Estado = CASE WHEN @op='EXCLUIR_ITEM' THEN 'E' ELSE 'I' END,
+                                     MotivoSolicitud = CASE WHEN @op='EXCLUIR_ITEM' THEN '2' ELSE '1' END,
+                                     Pedible = CONVERT(bit, 0)
                                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
                              @Cuenta, @Equipo, @Programa);
                     END
@@ -401,11 +601,18 @@ BEGIN
                        BloqueadoPor  = NULL,
                        ResponseJson  =
                            (SELECT Modo       = @modoReal,
+                                   Operacion  = @op,
                                    SecCuadro  = @SecCuadro,
                                    SecItem    = @ItemSec,
+                                   SecSolicitud = @SecSolicitud,
+                                   SolicitudesAprobadas = CASE WHEN @op='CONSOLIDAR_CMN'
+                                                               THEN @solicitudes ELSE NULL END,
+                                   FilasAprobadas       = CASE WHEN @op='CONSOLIDAR_CMN'
+                                                               THEN @aprobadasTotal ELSE NULL END,
                                    EnviadoASiga = CASE WHEN @modoReal = 'real'
                                                        THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END,
-                                   Periodos   = CONVERT(nvarchar(max), @Periodos)
+                                   Periodos   = CASE WHEN @op='CONSOLIDAR_CMN' THEN NULL
+                                                     ELSE CONVERT(nvarchar(max), @Periodos) END
                               FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
                        UsuarioModificacionAuditoria  = @Cuenta,
                        FechaModificacionAuditoria    = GETDATE(),
@@ -420,6 +627,15 @@ BEGIN
                         @SecCuadro, @ItemSec, NULL);
             END TRY
             BEGIN CATCH
+                /* El cursor de solicitudes vive dentro del TRY: si la
+                   aprobacion fallo a mitad hay que cerrarlo, o la siguiente
+                   operacion del lote no puede volver a declararlo. */
+                IF CURSOR_STATUS('local', 'curSol') >= 0
+                BEGIN
+                    CLOSE curSol;
+                    DEALLOCATE curSol;
+                END
+
                 DECLARE @err nvarchar(400) = LEFT(ERROR_MESSAGE(), 400);
                 DECLARE @nro int = ERROR_NUMBER();
 
@@ -489,3 +705,4 @@ GO
 
 PRINT 'W001 instalado: integracion.paEscribirCuadroModificado';
 GO
+

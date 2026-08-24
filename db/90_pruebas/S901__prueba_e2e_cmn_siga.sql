@@ -193,7 +193,13 @@ DELETE FROM @r; INSERT INTO @r EXEC sigcm.paEjecutarTransicion @p;
 SELECT @j = j FROM @r;
 IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO CMN_FIRMAR_A3: ' + @j; RETURN; END
 SET @Version = CONVERT(int, JSON_VALUE(@j,'$.Version'));
-PRINT ' PASO 5 - Anexo 3 firmado y remitido a OA. Estado: ' + ISNULL(JSON_VALUE(@j,'$.CodigoEstado'),'?');
+
+/* 6. Enviar a OA */
+SET @p = N'{' + @ActorJefe + N',"IdExpediente":"' + @IdExpediente + N'","CodigoTransicion":"CMN_ENVIAR_OA","Version":' + CONVERT(varchar(10), @Version) + N'}';
+DELETE FROM @r; INSERT INTO @r EXEC sigcm.paEjecutarTransicion @p;
+SELECT @j = j FROM @r;
+IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO CMN_ENVIAR_OA: ' + @j; RETURN; END
+SET @Version = CONVERT(int, JSON_VALUE(@j,'$.Version'));
 
 /* 7. OA deriva al JEFE de Abastecimiento, y de ahi baja la cadena             */
 /* -------------------------------------------------------------------------- */
@@ -224,36 +230,40 @@ END
 PRINT ' PASO 5 a 7 - Firmado, enviado a OA y bajado hasta el especialista de Abastecimiento.';
 
 /* -------------------------------------------------------------------------- */
-/* 8. Conformidad del especialista sobre el Anexo 3                            */
+/* 8. Las TRES firmas de Abastecimiento sobre el Anexo 3                       */
 /* -------------------------------------------------------------------------- */
 /*
-  En Abastecimiento el especialista da conformidad y no firma. Ahi se encola
-  ITEMS_ANEXO_3: el item entra a SIGA. El jefe no firma el Anexo 3.
+  Aqui se ve lo que antes no se podia probar: el Anexo 3 acumula cuatro firmas
+  —jefe del area usuaria, especialista, coordinador y jefe de Abastecimiento— y
+  la version del documento queda PARCIAL hasta la ultima.
+
+  El primer momento de escritura en SIGA cuelga de la firma del JEFE, no de la
+  del especialista: el item entra a SIG_CUADRO_MODIFICADO_DET recien cuando el
+  Anexo 3 esta completo.
 */
 
-DECLARE @Fi TABLE (n int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(40), firma bit);
-INSERT INTO @Fi (actor, codigo, etiqueta, firma) VALUES
-    (@ActorAbEs, 'CMN_ABAST_ESP_FIRMAR_A3', 'especialista', 0);
+DECLARE @Fi TABLE (n int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(40));
+INSERT INTO @Fi (actor, codigo, etiqueta) VALUES
+    (@ActorAbEs, 'CMN_ABAST_ESP_FIRMAR_A3',   'especialista'),
+    (@ActorAbCo, 'CMN_ABAST_COORD_FIRMAR_A3', 'coordinador'),
+    (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A3',  'jefe');
 
-DECLARE @et varchar(40), @firmaPaso bit;
+DECLARE @et varchar(40);
 SET @n = 1; SET @tot = (SELECT COUNT(*) FROM @Fi);
 WHILE @n <= @tot
 BEGIN
-    SELECT @ac = actor, @cd = codigo, @et = etiqueta, @firmaPaso = firma FROM @Fi WHERE n = @n;
+    SELECT @ac = actor, @cd = codigo, @et = etiqueta FROM @Fi WHERE n = @n;
 
-    IF @firmaPaso = 1
-    BEGIN
-        SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
-          "CodigoTipoDocumento":"CMN_ANEXO_3_SOLICITUD_MODIFICACION","ArchivoHash":"S901-A3-' + @et + N'"}';
-        DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
-        SELECT @j = j FROM @r;
-        IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A3 ' + @et + ': ' + @j; RETURN; END
-        PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
-            + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
-    END
-    ELSE
-        PRINT '   ' + @et + ' da conformidad sin firmar.';
+    SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
+      "CodigoTipoDocumento":"CMN_ANEXO_3_SOLICITUD_MODIFICACION","ArchivoHash":"S901-A3-' + @et + N'"}';
+    DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
+    SELECT @j = j FROM @r;
+    IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A3 ' + @et + ': ' + @j; RETURN; END
+    PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
+        + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
 
+    /* El tipo de modificacion se declara junto con la conformidad del
+       especialista. De el depende despues la regla del viernes. */
     SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente
            + N'","CodigoTransicion":"' + @cd
            + N'","Version":' + CONVERT(varchar(10), @Version)
@@ -266,7 +276,7 @@ BEGIN
     SET @n = @n + 1;
 END
 
-PRINT ' PASO 8 - Anexo 3 conforme. Operaciones encoladas hacia SIGA: '
+PRINT ' PASO 8 - Anexo 3 firmado por los tres escalones. Operaciones encoladas hacia SIGA: '
     + ISNULL(JSON_VALUE(@j,'$.OperacionesEncoladas'),'0');
 
 /* -------------------------------------------------------------------------- */
@@ -377,29 +387,25 @@ SELECT @j = j FROM @r;
 IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO registrar A4: ' + @j; RETURN; END
 PRINT ' PASO 11 - PDF del Anexo 4 registrado en version ' + ISNULL(JSON_VALUE(@j,'$.Version'),'?');
 
-/* Elevacion del Anexo 4; solo el jefe firma. */
-DECLARE @F4 TABLE (n int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(40), firma bit);
-INSERT INTO @F4 (actor, codigo, etiqueta, firma) VALUES
-    (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista', 0),
-    (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe',         1);
+/* Las tres firmas del Anexo 4, en cadena, cada una seguida de su transicion. */
+DECLARE @F4 TABLE (n int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(40));
+INSERT INTO @F4 (actor, codigo, etiqueta) VALUES
+    (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista'),
+    (@ActorAbCo, 'CMN_ABAST_COORD_FIRMAR_A4', 'coordinador'),
+    (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe');
 
 SET @n = 1; SET @tot = (SELECT COUNT(*) FROM @F4);
 WHILE @n <= @tot
 BEGIN
-    SELECT @ac = actor, @cd = codigo, @et = etiqueta, @firmaPaso = firma FROM @F4 WHERE n = @n;
+    SELECT @ac = actor, @cd = codigo, @et = etiqueta FROM @F4 WHERE n = @n;
 
-    IF @firmaPaso = 1
-    BEGIN
-        SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
-          "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S901-A4-' + @et + N'"}';
-        DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
-        SELECT @j = j FROM @r;
-        IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A4 ' + @et + ': ' + @j; RETURN; END
-        PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
-            + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
-    END
-    ELSE
-        PRINT '   ' + @et + ' eleva el Anexo 4 sin firmar.';
+    SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
+      "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S901-A4-' + @et + N'"}';
+    DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
+    SELECT @j = j FROM @r;
+    IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A4 ' + @et + ': ' + @j; RETURN; END
+    PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
+        + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
 
     SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente
            + N'","CodigoTransicion":"' + @cd
@@ -411,7 +417,7 @@ BEGIN
     SET @n = @n + 1;
 END
 
-PRINT ' PASO 12 y 13 - Anexo 4 firmado por el jefe. Operaciones encoladas: '
+PRINT ' PASO 12 y 13 - Anexo 4 firmado por los tres. Operaciones encoladas: '
     + ISNULL(JSON_VALUE(@j,'$.OperacionesEncoladas'),'0');
 
 /* 14. Drenar: segundo momento de escritura en SIGA */
