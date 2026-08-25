@@ -701,7 +701,7 @@ GO
 /*
   Documentos de un expediente con su version vigente. Es lo que la pantalla
   necesita para saber si hay que generar, si se puede firmar y con que URL se
-  abre el PDF.
+  abre el PDF. Payload (JSON de origen) permite reabrir el TDR Anexo 3.
 
   Entrada: { "Actor": {...}, "IdExpediente": "..." }
 */
@@ -745,6 +745,7 @@ BEGIN
                               TipoDocumento = td.Nombre,
                               dv.Version, dv.Estado,
                               dv.GeneradoDocumento, dv.NombreDocumento,
+                              Payload = JSON_QUERY(ISNULL(dv.Payload, N'{}')),
                               dv.FirmadoEn, d.Consolidado,
                               /* Para que la pantalla sepa si ofrecer el boton de
                                  firmar a QUIEN esta mirando. */

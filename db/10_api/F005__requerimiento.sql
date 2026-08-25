@@ -44,11 +44,11 @@
   1. OCHO UIT (REQ-06). El tope sale de requerimiento.ParametroAnio y no de una
      constante: cambia cada anio. El mensaje dice el tope real para que el area
      usuaria sepa cuanto le sobra.
-  2. CONDICION CMN (REQ-03, REQ-04). Si la necesidad esta incluida en el CMN se
-     exige el Anexo 1 firmado; si no lo esta, hay que apoyarse en una
-     modificacion del CMN FINALIZADA o adjuntar el Anexo 4 firmado. Es el unico
-     punto donde los dos modulos se tocan, y se comprueba de verdad contra
-     cmn.Solicitud.
+  2. CONDICION CMN (REQ-03, REQ-04). El registro (REQ-12) captura la necesidad
+     y los pedidos SIGA. El Anexo 1 / Anexo 4 se elaboran despues (REQ-13),
+     cuando el expediente pasa a REQ_DOC_PENDIENTE. En este procedimiento no se
+     exige adjunto. Si el sobre trae IdSolicitudCmn, si se comprueba que esa
+     modificacion exista y ya tenga el Anexo 4 en el area usuaria.
   3. DIEZ DIAS HABILES (PLZ-01). El requerimiento se presenta al menos diez dias
      habiles antes del inicio previsto, contados con sigcm.fnSumarDiasHabiles.
   4. COHERENCIA DEL MONTO. La suma de los items debe coincidir con el monto
@@ -229,41 +229,33 @@ BEGIN
             THROW 51413, @errTope, 1;
         END
 
-        /* ---- REQ-03 y REQ-04: la condicion frente al CMN -------------- */
-        IF @CondicionCmn = 'INCLUIDO'
+        /* ---- REQ-03 y REQ-04: la condicion frente al CMN --------------
+           El Anexo 1 firmado (incluido) y el Anexo 4 (no incluido) no se
+           piden aqui: el formulario de registro ya no los captura, y el
+           flujo los elabora en REQ-13 (estado REQ_DOC_PENDIENTE).
+           Si el sobre apunta a una modificacion del CMN, esa referencia
+           si se valida contra cmn.Solicitud. */
+        IF @IdSolicitudCmn IS NOT NULL
         BEGIN
-            IF NULLIF(LTRIM(RTRIM(@GeneradoDocumentoCmn)), '') IS NULL
-                THROW 51414, 'VALIDACION_CMN: la necesidad esta incluida en el CMN y debe adjuntarse el Anexo 1 firmado.', 1;
-        END
-        ELSE
-        BEGIN
-            /* No incluida: o se apoya en una modificacion del CMN finalizada, o
-               se adjunta el Anexo 4 firmado. Una de las dos, no ninguna. */
-            IF @IdSolicitudCmn IS NULL AND NULLIF(LTRIM(RTRIM(@GeneradoDocumentoCmn)), '') IS NULL
-                THROW 51415, 'VALIDACION_CMN: la necesidad no esta incluida en el CMN. Seleccione la modificacion aprobada o adjunte el Anexo 4 firmado.', 1;
+            DECLARE @EstadoCmn varchar(60);
 
-            IF @IdSolicitudCmn IS NOT NULL
+            SELECT @EstadoCmn = e.CodigoEstado
+              FROM cmn.Solicitud AS s
+              JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
+             WHERE s.IdSolicitud = @IdSolicitudCmn AND s.Activo = 1 AND e.Anulado = 0;
+
+            IF @EstadoCmn IS NULL
+                THROW 51416, 'NO_ENCONTRADO: la modificacion del CMN indicada no existe o esta anulada.', 1;
+
+            /* El Anexo 4 llega al area usuaria en CMN_A4_ENVIADO, sin
+               recepcion. CMN_FINALIZADO queda para expedientes que ya
+               cerraron con el paso anterior. */
+            IF @EstadoCmn NOT IN ('CMN_A4_ENVIADO', 'CMN_FINALIZADO')
             BEGIN
-                DECLARE @EstadoCmn varchar(60);
-
-                SELECT @EstadoCmn = e.CodigoEstado
-                  FROM cmn.Solicitud AS s
-                  JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
-                 WHERE s.IdSolicitud = @IdSolicitudCmn AND s.Activo = 1 AND e.Anulado = 0;
-
-                IF @EstadoCmn IS NULL
-                    THROW 51416, 'NO_ENCONTRADO: la modificacion del CMN indicada no existe o esta anulada.', 1;
-
-                /* El Anexo 4 llega al area usuaria en CMN_A4_ENVIADO, sin
-                   recepcion. CMN_FINALIZADO queda para expedientes que ya
-                   cerraron con el paso anterior. */
-                IF @EstadoCmn NOT IN ('CMN_A4_ENVIADO', 'CMN_FINALIZADO')
-                BEGIN
-                    DECLARE @errCmn nvarchar(500) = CONCAT(
-                        'CONFLICTO_CMN: la modificacion del CMN esta en estado ', @EstadoCmn,
-                        ' y solo habilita el requerimiento cuando el Anexo 4 ya esta en el area usuaria.');
-                    THROW 51417, @errCmn, 1;
-                END
+                DECLARE @errCmn nvarchar(500) = CONCAT(
+                    'CONFLICTO_CMN: la modificacion del CMN esta en estado ', @EstadoCmn,
+                    ' y solo habilita el requerimiento cuando el Anexo 4 ya esta en el area usuaria.');
+                THROW 51417, @errCmn, 1;
             END
         END
 
@@ -799,6 +791,12 @@ BEGIN
                                         WHERE it.IdRequerimiento = r.IdRequerimiento AND it.Activo = 1),
                               Pedidos = (SELECT COUNT(*) FROM requerimiento.RequerimientoPedido AS pe
                                           WHERE pe.IdRequerimiento = r.IdRequerimiento AND pe.Activo = 1),
+                              /* Documento tecnico vigente (Anexo 5 en locacion).
+                                 La bandeja muestra el PDF registrado, no uno rearmado. */
+                              DocumentoSistema = doc.GeneradoDocumento,
+                              NombreDocumento = doc.NombreDocumento,
+                              EstadoDocumento = doc.Estado,
+                              CodigoTipoDocumento = doc.CodigoTipoDocumento,
                               /* Mismas transiciones que sigcm.paListarTransicionDisponible
                                  para este expediente y este rol. JSON_QUERY evita
                                  que FOR JSON las escape como texto. */
@@ -840,6 +838,24 @@ BEGIN
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
                          JOIN sigcm.TipoContratacion AS tc ON tc.CodigoTipoContratacion = r.CodigoTipoContratacion
+                         OUTER APPLY (
+                             SELECT TOP 1 dv.GeneradoDocumento, dv.NombreDocumento, dv.Estado,
+                                    d.CodigoTipoDocumento
+                               FROM sigcm.DocumentoExpediente AS de
+                               JOIN sigcm.Documento AS d ON d.IdDocumento = de.IdDocumento
+                               JOIN sigcm.DocumentoVersion AS dv
+                                 ON dv.IdDocumento = d.IdDocumento
+                                AND dv.Version = d.VersionVigente
+                              WHERE de.IdExpediente = e.IdExpediente
+                                AND d.Anulado = 0 AND d.Activo = 1
+                                AND d.CodigoTipoDocumento = CASE r.CodigoTipoContratacion
+                                    WHEN 'LOCACION'    THEN 'REQ_PROPUESTA_LOCACION'
+                                    WHEN 'SERVICIO'    THEN 'REQ_TDR_SERVICIO'
+                                    WHEN 'CONSULTORIA' THEN 'REQ_TDR_CONSULTORIA'
+                                    WHEN 'BIEN'        THEN 'REQ_EETT_BIEN'
+                                END
+                              ORDER BY d.FechaCreacionAuditoria DESC
+                         ) AS doc
                          OUTER APPLY (
                              SELECT TOP 1 o.CodigoEstadoRetorno
                                FROM sigcm.Observacion AS o
