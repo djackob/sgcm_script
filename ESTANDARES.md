@@ -347,7 +347,30 @@ El `mensaje` de la rutina se muestra tal cual: está escrito para el usuario y
 dice exactamente qué falló. Sustituirlo por un texto genérico pierde información
 que la base ya se tomó el trabajo de producir.
 
-### 4.7 Estilos
+### 4.7 No se agrega texto informativo que nadie pidió
+
+**En una pantalla se pone lo que se pidió: campos, etiquetas y mensajes de
+error. Nada más.** Notas explicativas, subtítulos que describen cómo funciona el
+formulario, avisos de «esto se toma de la sesión», ayudas bajo un combo contando
+las consecuencias de cada opción: **no van**, salvo que el negocio los pida
+expresamente.
+
+Por qué. El usuario del SIGCM conoce su trabajo mejor que el formulario: lo que
+para quien programa es una aclaración útil, para quien registra veinte Anexos 3
+al mes es ruido entre él y el campo que tiene que llenar. Además cada párrafo
+envejece —cambia una regla y queda un texto que miente— y termina compitiendo
+con el mensaje de la rutina, que sí está escrito para el usuario y sí dice
+exactamente qué falló.
+
+Lo mismo vale para los formatos oficiales: **el PDF de un Anexo es una réplica
+del formato de la Directiva.** No se le agregan campos, filas ni leyendas
+porque al sistema le resulten informativos; si el formato no los tiene, no van.
+
+Dónde sí va la explicación: en un **comentario del código**, que es donde la
+lee quien la necesita —el que va a tocar esa pantalla— y no quien solo quiere
+registrar su solicitud.
+
+### 4.8 Estilos
 
 El sistema visual es global (`src/styles/components`). El `.scss` del componente
 lleva **solo lo propio de esa pantalla**. Clases disponibles: `page-title`,
@@ -356,7 +379,7 @@ lleva **solo lo propio de esa pantalla**. Clases disponibles: `page-title`,
 `campo-control`, `campo-etiqueta`, `modal-fondo`, `modal-app`, `modal-cabecera`,
 `modal-cuerpo`, `modal-footer`.
 
-### 4.8 Confirmación antes de actuar
+### 4.9 Confirmación antes de actuar
 
 Toda acción del flujo pasa por confirmación, incluso las que no exigen
 comentario: son cambios de estado con efectos fuera de la pantalla —firmas,

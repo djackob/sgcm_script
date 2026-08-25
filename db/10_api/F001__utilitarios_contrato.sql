@@ -403,20 +403,72 @@ BEGIN
                            ORDER BY CentroCosto
                              FOR JSON PATH);
 
+        /* META y FUENTE_FINANC SE DELIMITAN POR AREA USUARIA.
+
+           Con CentroCosto se devuelven solo las metas asignadas a ese centro en
+           SIG_METAS_X_CENTRO y solo las fuentes habilitadas dentro de esas
+           metas. Sin CentroCosto se devuelve el maestro completo, que es lo que
+           necesita Abastecimiento cuando consulta transversalmente.
+
+           Por que importa: la entidad tiene 487 metas y 100 fuentes, y un area
+           usuaria tiene techo en una sola meta con una sola fuente en casi todos
+           los casos. Ofrecerle la lista entera la dejaba elegir combinaciones
+           sin techo -canon, donaciones- y el clasificador quedaba vacio sin que
+           la pantalla explicara por que. La delimitacion es de SIGA, no nuestra:
+           esta tabla es con la que el propio SIGA arma esos combos. */
         ELSE IF @Maestro = 'META'
-            SET @Datos = (SELECT TOP (@Limite) SecFunc, Nombre, Meta, Finalidad, ActProy, Activo
-                            FROM siga.vwMeta
-                           WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
-                             AND (@Texto IS NULL OR Nombre LIKE '%' + @Texto + '%')
-                           ORDER BY SecFunc
+            SET @Datos = (SELECT TOP (@Limite) m.SecFunc, m.Nombre, m.Meta, m.Finalidad, m.ActProy, m.Activo
+                            FROM siga.vwMeta AS m
+                           WHERE m.AnoEje = @AnoEje AND m.SecEjec = @SecEjec
+                             AND (@Texto IS NULL OR m.Nombre LIKE '%' + @Texto + '%')
+                             AND (@CentroCosto IS NULL
+                                  OR EXISTS (SELECT 1 FROM siga.vwMetaXCentro AS mc
+                                              WHERE mc.AnoEje = @AnoEje AND mc.SecEjec = @SecEjec
+                                                AND mc.CentroCosto = @CentroCosto
+                                                AND mc.SecFunc = m.SecFunc))
+                           ORDER BY m.SecFunc
                              FOR JSON PATH);
 
         ELSE IF @Maestro = 'FUENTE_FINANC'
-            SET @Datos = (SELECT TOP (@Limite) Origen, FuenteFinanc, Descripcion, MontoAsignado, Activo
-                            FROM siga.vwFuenteFinanc
-                           WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
-                           ORDER BY Origen, FuenteFinanc
+            SET @Datos = (SELECT TOP (@Limite) f.Origen, f.FuenteFinanc, f.Descripcion, f.MontoAsignado, f.Activo
+                            FROM siga.vwFuenteFinanc AS f
+                           WHERE f.AnoEje = @AnoEje AND f.SecEjec = @SecEjec
+                             AND (@CentroCosto IS NULL
+                                  OR EXISTS (SELECT 1 FROM siga.vwMetaXCentro AS mc
+                                              WHERE mc.AnoEje = @AnoEje AND mc.SecEjec = @SecEjec
+                                                AND mc.CentroCosto = @CentroCosto
+                                                AND mc.Origen = f.Origen
+                                                AND mc.FuenteFinanc = f.FuenteFinanc
+                                                /* Con SecFunc, la fuente ademas
+                                                   tiene que pertenecer a esa meta. */
+                                                AND (@SecFunc IS NULL OR mc.SecFunc = @SecFunc)))
+                           ORDER BY f.Origen, f.FuenteFinanc
                              FOR JSON PATH);
+
+        /* Las metas del area usuaria con sus fuentes, en una sola lectura. Es lo
+           que la pantalla necesita para encadenar meta -> fuente sin volver a
+           preguntar por cada cambio del combo. */
+        ELSE IF @Maestro = 'META_X_CENTRO'
+        BEGIN
+            IF @CentroCosto IS NULL
+                THROW 51026, 'VALIDACION_PAYLOAD: META_X_CENTRO exige CentroCosto.', 1;
+            SET @Datos = (SELECT TOP (@Limite) mc.SecFunc, mc.Origen, mc.FuenteFinanc,
+                                 mc.TipoRecurso, mc.PorcTecho,
+                                 Meta = m.Nombre, MetaActiva = m.Activo,
+                                 Fuente = f.Descripcion
+                            FROM siga.vwMetaXCentro AS mc
+                            LEFT JOIN siga.vwMeta AS m
+                                   ON m.AnoEje = mc.AnoEje AND m.SecEjec = mc.SecEjec
+                                  AND m.SecFunc = mc.SecFunc
+                            LEFT JOIN siga.vwFuenteFinanc AS f
+                                   ON f.AnoEje = mc.AnoEje AND f.SecEjec = mc.SecEjec
+                                  AND f.Origen = mc.Origen AND f.FuenteFinanc = mc.FuenteFinanc
+                           WHERE mc.AnoEje = @AnoEje AND mc.SecEjec = @SecEjec
+                             AND mc.CentroCosto = @CentroCosto
+                             AND (@SecFunc IS NULL OR mc.SecFunc = @SecFunc)
+                           ORDER BY mc.SecFunc, mc.Origen, mc.FuenteFinanc
+                             FOR JSON PATH);
+        END
 
         ELSE IF @Maestro = 'TAREA'
         BEGIN
@@ -541,8 +593,8 @@ BEGIN
         BEGIN
             DECLARE @errMaestro nvarchar(300) = CONCAT(
                 'VALIDACION_PAYLOAD: maestro desconocido "', @Maestro,
-                '". Validos: CENTRO_COSTO, META, FUENTE_FINANC, TAREA, UNIDAD_MEDIDA, ',
-                'CATALOGO, CUADRO_VIGENTE, TECHO, ETAPA_CENTRO.');
+                '". Validos: CENTRO_COSTO, META, META_X_CENTRO, FUENTE_FINANC, TAREA, ',
+                'UNIDAD_MEDIDA, CATALOGO, CUADRO_VIGENTE, TECHO, ETAPA_CENTRO.');
             THROW 51025, @errMaestro, 1;
         END
 

@@ -22,7 +22,7 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 5 | `db/00_ddl/V001__nucleo_organizacion_seguridad.sql` | DBSIGCM | Esquemas, organización, seguridad |
 | 6 | `db/00_ddl/V002__nucleo_workflow_documentos.sql` | DBSIGCM | Expediente, estados, documentos |
 | 7 | `db/00_ddl/V003__nucleo_observaciones_plazos_auditoria.sql` | DBSIGCM | Observaciones, plazos, auditoría |
-| 8 | `db/00_ddl/V004__maestros_siga_vistas.sql` | DBSIGCM | Las 10 vistas sobre SIGA |
+| 8 | `db/00_ddl/V004__maestros_siga_vistas.sql` | DBSIGCM | Las 11 vistas sobre SIGA |
 | 9 | `db/00_ddl/V005__cmn_solicitud_item_periodo.sql` | DBSIGCM | Módulo CMN |
 | 10 | `db/00_ddl/V006__integracion_outbox_mapeo.sql` | DBSIGCM | Cola hacia SIGA |
 | 11 | `db/00_ddl/V007__modulo_ruta.sql` | DBSIGCM | Ruta e icono por módulo, para el menú |
@@ -30,6 +30,7 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13 | `db/00_ddl/V009__requerimiento_registro.sql` | DBSIGCM | Módulo Requerimiento, núcleo |
 | 13b | `db/00_ddl/V010__correlativo.sql` | DBSIGCM | Correlativos del código de expediente |
 | 13c | `db/00_ddl/V011__cmn_paquete_anexo4.sql` | DBSIGCM | Anexo 4 múltiple y firma en cadena |
+| 13d | `db/00_ddl/V012__cmn_tipificacion_solicitud.sql` | DBSIGCM | Solicitud ordinaria / extraordinaria con justificación |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
@@ -59,6 +60,8 @@ aplica ordenados por nombre, así que agregar uno nuevo no obliga a tocar
 | `S902__continuar_anexo4.sql` | Continúa un expediente detenido en `CMN_A3_APROBADO` | **sí** | sí |
 | `S903__prueba_anexo4_multiple.sql` | Anexo 4 que agrupa Anexos 3 de **dos áreas usuarias** | no | no, se limpia sola |
 | `S904__casos_anexo4_multiple.sql` | Deja 4 Anexos 3 en borrador, uno por área usuaria real, para recorrer el flujo a mano desde la pantalla | no | sí, esa es la idea |
+| `S905__limpiar_expedientes_cmn.sql` | **Borra** todos los expedientes CMN de DBSIGCM y reinicia el correlativo. Exige `-v confirmar="SI"` | no | sí: deja la base sin expedientes |
+| `S906__prueba_edicion_cmn.sql` | Corregir y anular un Anexo 3: quién puede, desde qué estado, y que no duplique el expediente | no | no, se limpia sola |
 
 `S903` es la que conviene correr después de tocar el flujo: no toca SIGA, se
 limpia al terminar y es repetible. Comprueba la firma en cadena, la regla del

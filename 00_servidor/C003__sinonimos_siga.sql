@@ -62,6 +62,10 @@ INSERT INTO @tablas (tabla) VALUES
     (N'FUENTE_FINANC_EJEC'),
     (N'FUENTE_FINANC'),
     (N'SIG_CENTRO_COSTO_TAREA'),
+    /* Metas y fuentes habilitadas por area usuaria. Es la tabla con la que el
+       SIGA delimita los combos de cada unidad: sin ella el formulario ofrece
+       las 487 metas de la entidad y las fuentes de toda la ejecutora. */
+    (N'SIG_METAS_X_CENTRO'),
     (N'UNIDAD_MEDIDA'),
     (N'CATALOGO_BIEN_SERV'),
     /* Datos que si se mueven */

@@ -18,6 +18,8 @@
     "Solicitud": {
       "AnoEje": 2026, "SecEjec": 1750, "CentroCosto": "01.02.02",
       "TipoOperacion": "MODIFICACION", "Sustento": "...",
+      "TipoInclusion": "ORDINARIA",              o "EXTRAORDINARIA"
+      "JustificacionUrgencia": "...",            obligatoria si es EXTRAORDINARIA
       "DatosAdicionales": { }
     },
     "Items": [
@@ -37,6 +39,24 @@
   REGLA DEL MOCKUP: por cada item se registra exclusion O inclusion, nunca ambas,
   y la tabla debe conservar al menos un item. Aqui eso es TipoMovimiento, que es
   un solo valor por linea, mas la validacion de items no vacios.
+
+  SOLO INCLUSION O EXCLUSION. El Anexo 3 oficial tiene dos pares de columnas
+  -exclusion e inclusion- y no tiene una tercera para modificar. MODIFICACION era
+  una via propia del sistema que no figura en el formato ni en la Directiva:
+  cambiar la cantidad de un item programado se expresa excluyendo la linea
+  vigente e incluyendola con la cantidad nueva, que es lo que el area usuaria
+  puede firmar tal como se imprime. El valor sigue existiendo en el modelo
+  -cmn.SolicitudItem lo admite y W001 sabe proyectarlo- porque hay expedientes
+  historicos con esa marca; lo que no se admite es registrar uno nuevo.
+
+  TIPIFICACION DE LA SOLICITUD. TipoInclusion se declara AQUI, al registrar, y lo
+  declara el area usuaria. Antes lo ponia el especialista de Abastecimiento al
+  conformar el Anexo 3 (F004), lo que llegaba tarde: de esa marca depende el
+  plazo -el Anexo 4 ordinario sale los viernes, el extraordinario cualquier dia-
+  y quien conoce la urgencia es quien tiene la necesidad. Una solicitud
+  EXTRAORDINARIA exige ademas JustificacionUrgencia; el archivo de sustento
+  -informe o nota tecnica- se adjunta como documento del expediente
+  (CMN_SUSTENTO_URGENCIA) con sigcm.paRegistrarDocumento.
 
   LOS 48 PERIODOS. El cliente envia solo los meses con cantidad. El procedimiento
   materializa 4 anios x 12 meses = 48 filas por item, rellenando con cero los no
@@ -100,6 +120,62 @@ RETURN
 GO
 
 /* ========================================================================== */
+/* 0bis. cmn.fnPuedeEditar                                                   */
+/* ========================================================================== */
+
+/*
+  Si ESTE actor puede corregir el contenido de un Anexo 3 que esta en ESTE
+  estado. Una sola definicion, consultada por las dos rutinas que la necesitan:
+  cmn.paRegistrarSolicitud, que lo exige antes de escribir, y
+  cmn.paListarSolicitud, que se lo dice a la pantalla para que ofrezca el boton.
+  Repartida en dos sitios terminaria diciendo cosas distintas.
+
+  LOS TRES CANDADOS
+  1. El expediente esta en un estado del AREA USUARIA en el que el Anexo 3
+     todavia no vale como firmado.
+  2. El expediente esta EN LA UNIDAD del actor. Sin esto, un especialista podria
+     corregir el expediente de otra oficina que casualmente este en el mismo
+     estado.
+  3. El actor ejerce un rol del area usuaria. El negocio pidio que puedan
+     corregir tanto el especialista que lo registro como su jefe, sin importar a
+     cual de los dos le toque el turno: el jefe que encuentra un error no tiene
+     que devolverlo para que lo arreglen.
+
+  QUE ESTADOS Y POR QUE
+    CMN_BORRADOR        aun no se genero el documento
+    CMN_PEND_FIRMA_A3   generado, pendiente de la firma del jefe
+    CMN_OBS_AU_JEFE     volvio observado y esta con el jefe
+    CMN_OBS_AU_COORD    el jefe lo derivo al coordinador
+    CMN_OBSERVADO       el coordinador lo derivo al especialista para subsanar
+
+  CMN_A3_FIRMADO queda fuera a proposito: ahi el jefe ya firmo, y corregir el
+  contenido despues de la firma es rehacer el documento, no editarlo. Los
+  CMN_SUBS_* tambien: en ellos el area ya declaro subsanado y el expediente va
+  de salida hacia Abastecimiento.
+*/
+CREATE OR ALTER FUNCTION cmn.fnPuedeEditar
+(
+    @CodigoEstado varchar(60),
+    @CodigoRol    varchar(40),
+    @EnMiUnidad   bit
+)
+RETURNS bit
+AS
+BEGIN
+    IF @EnMiUnidad <> 1 RETURN 0;
+
+    IF @CodigoRol NOT IN ('AREA_ESPECIALISTA','AREA_COORDINADOR','AREA_JEFE')
+        RETURN 0;
+
+    IF @CodigoEstado NOT IN ('CMN_BORRADOR','CMN_PEND_FIRMA_A3',
+                             'CMN_OBS_AU_JEFE','CMN_OBS_AU_COORD','CMN_OBSERVADO')
+        RETURN 0;
+
+    RETURN 1;
+END
+GO
+
+/* ========================================================================== */
 /* 1. cmn.paRegistrarSolicitud                                               */
 /* ========================================================================== */
 
@@ -138,23 +214,76 @@ BEGIN
         /* ---- Cabecera ------------------------------------------------- */
         DECLARE @AnoEje smallint, @SecEjec int, @CentroCosto varchar(15),
                 @TipoOperacion varchar(20), @Sustento nvarchar(max),
-                @DatosAdicionales nvarchar(max);
+                @TipoInclusion varchar(15), @JustificacionUrgencia nvarchar(max),
+                @DatosAdicionales nvarchar(max), @IdSolicitud uniqueidentifier;
 
-        SELECT @AnoEje           = AnoEje,
-               @SecEjec          = SecEjec,
-               @CentroCosto      = CentroCosto,
-               @TipoOperacion    = ISNULL(TipoOperacion, 'MODIFICACION'),
-               @Sustento         = Sustento,
-               @DatosAdicionales = DatosAdicionales
+        /* Con IdSolicitud la rutina CORRIGE una solicitud existente; sin el,
+           registra una nueva. Es la misma operacion desde el punto de vista del
+           negocio —el area usuaria declara que necesita— y por eso comparte
+           todas las validaciones: lo que cambia es donde aterriza el resultado.
+
+           Antes este campo se leia y se descartaba en silencio, de modo que
+           subsanar una observacion creaba un expediente nuevo con correlativo
+           nuevo y dejaba el observado vivo. Ese era el pendiente 1 del
+           2026-08-20. */
+        SET @IdSolicitud = TRY_CONVERT(uniqueidentifier,
+                                       JSON_VALUE(@parametro, '$.Solicitud.IdSolicitud'));
+
+        SELECT @AnoEje                = AnoEje,
+               @SecEjec               = SecEjec,
+               @CentroCosto           = CentroCosto,
+               @TipoOperacion         = ISNULL(TipoOperacion, 'MODIFICACION'),
+               @Sustento              = Sustento,
+               @TipoInclusion         = UPPER(NULLIF(LTRIM(RTRIM(TipoInclusion)), '')),
+               @JustificacionUrgencia = NULLIF(LTRIM(RTRIM(JustificacionUrgencia)), ''),
+               @DatosAdicionales      = DatosAdicionales
         FROM OPENJSON(@parametro, '$.Solicitud')
         WITH (
-            AnoEje           smallint,
-            SecEjec          int,
-            CentroCosto      varchar(15),
-            TipoOperacion    varchar(20),
-            Sustento         nvarchar(max),
-            DatosAdicionales nvarchar(max) AS JSON
+            AnoEje                smallint,
+            SecEjec               int,
+            CentroCosto           varchar(15),
+            TipoOperacion         varchar(20),
+            Sustento              nvarchar(max),
+            TipoInclusion         varchar(15),
+            JustificacionUrgencia nvarchar(max),
+            DatosAdicionales      nvarchar(max) AS JSON
         );
+
+        /* ---- Modo correccion: quien, sobre que y desde que estado ------ */
+        DECLARE @IdExpedienteEdit uniqueidentifier, @CodigoEstadoEdit varchar(60),
+                @CodigoEdit varchar(40), @IdUnidadActualEdit uniqueidentifier;
+
+        IF @IdSolicitud IS NOT NULL
+        BEGIN
+            SELECT @IdExpedienteEdit   = e.IdExpediente,
+                   @CodigoEstadoEdit   = e.CodigoEstado,
+                   @CodigoEdit         = s.Codigo,
+                   @IdUnidadActualEdit = e.IdUnidadActual,
+                   /* Las coordenadas del cuadro NO se reciben del cliente al
+                      corregir: se toman de la fila. Cambiar el ejercicio o el
+                      centro de costo de un expediente ya numerado no es una
+                      correccion, es otro expediente. */
+                   @AnoEje             = s.AnoEje,
+                   @SecEjec            = s.SecEjec,
+                   @CentroCosto        = s.CentroCosto
+              FROM cmn.Solicitud AS s
+              JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
+             WHERE s.IdSolicitud = @IdSolicitud AND s.Activo = 1
+               AND e.Anulado = 0 AND e.Activo = 1;
+
+            IF @IdExpedienteEdit IS NULL
+                THROW 51127, 'NO_ENCONTRADO: la solicitud que se intenta corregir no existe, esta anulada o fue dada de baja.', 1;
+
+            IF cmn.fnPuedeEditar(@CodigoEstadoEdit, @CodigoRol,
+                                 CASE WHEN @IdUnidadActualEdit = @IdUnidad THEN 1 ELSE 0 END) = 0
+            BEGIN
+                DECLARE @errEdit nvarchar(400) = CONCAT(
+                    'NO_AUTORIZADO: ', @CodigoEdit, ' no puede corregirse por este perfil en el estado ',
+                    @CodigoEstadoEdit,
+                    '. Solo el area usuaria que lo tiene, y mientras el Anexo 3 no este firmado o haya vuelto observado.');
+                THROW 51128, @errEdit, 1;
+            END
+        END
 
         IF @AnoEje IS NULL OR @SecEjec IS NULL
             THROW 51101, 'VALIDACION_PAYLOAD: Solicitud.AnoEje y Solicitud.SecEjec son obligatorios.', 1;
@@ -164,6 +293,25 @@ BEGIN
             THROW 51103, 'VALIDACION_SUSTENTO: el sustento de la solicitud es obligatorio.', 1;
         IF @TipoOperacion <> 'MODIFICACION'
             THROW 51104, 'VALIDACION_PAYLOAD: la v1 solo habilita TipoOperacion = MODIFICACION (ADR-002).', 1;
+
+        /* Tipificacion: la declara el area usuaria al registrar, y de ella
+           depende cuando podra generarse el Anexo 4 que la aprueba. */
+        IF @TipoInclusion IS NULL
+            THROW 51122, 'VALIDACION_TIPO_SOLICITUD: indique si la solicitud es ORDINARIA o EXTRAORDINARIA.', 1;
+        IF @TipoInclusion NOT IN ('ORDINARIA','EXTRAORDINARIA')
+            THROW 51123, 'VALIDACION_TIPO_SOLICITUD: TipoInclusion debe ser ORDINARIA o EXTRAORDINARIA.', 1;
+
+        /* La urgencia se sustenta o no es urgencia. Es lo que Abastecimiento
+           tiene que poder leer para validarla contra las directivas del MEF. */
+        IF @TipoInclusion = 'EXTRAORDINARIA' AND @JustificacionUrgencia IS NULL
+            THROW 51124, 'VALIDACION_JUSTIFICACION: una solicitud extraordinaria debe justificar por escrito la urgencia de la necesidad.', 1;
+
+        /* Una ordinaria no arrastra justificacion de urgencia: si el usuario
+           cambio de opinion en el formulario, el texto que quedo escrito no
+           corresponde a lo que se esta registrando. */
+        IF @TipoInclusion <> 'EXTRAORDINARIA'
+            SET @JustificacionUrgencia = NULL;
+
         IF ISJSON(ISNULL(@DatosAdicionales, N'{}')) <> 1
             SET @DatosAdicionales = N'{}';
         SET @DatosAdicionales = ISNULL(@DatosAdicionales, N'{}');
@@ -271,11 +419,22 @@ BEGIN
         DECLARE @Orden int, @errItem nvarchar(400);
 
         SELECT TOP 1 @Orden = Orden FROM #Item
-         WHERE TipoMovimiento NOT IN ('INCLUSION','EXCLUSION','MODIFICACION') OR TipoMovimiento IS NULL;
+         WHERE TipoMovimiento NOT IN ('INCLUSION','EXCLUSION') OR TipoMovimiento IS NULL;
         IF @Orden IS NOT NULL
         BEGIN
+            /* MODIFICACION se distingue del resto porque no es un valor erroneo
+               sino uno retirado: el mensaje tiene que decir que hacer en su
+               lugar, no solo que no vale. Ver la nota de la cabecera. */
+            IF (SELECT TipoMovimiento FROM #Item WHERE Orden = @Orden) = 'MODIFICACION'
+            BEGIN
+                SET @errItem = CONCAT('VALIDACION_ITEMS: el item ', @Orden,
+                    ' es una MODIFICACION, y el Anexo 3 solo registra inclusiones y exclusiones. ',
+                    'Para cambiar la cantidad de un item programado, excluya la linea vigente e incluyala con la cantidad nueva.');
+                THROW 51125, @errItem, 1;
+            END
+
             SET @errItem = CONCAT('VALIDACION_ITEMS: el item ', @Orden,
-                ' tiene un TipoMovimiento invalido. Valores: INCLUSION, EXCLUSION, MODIFICACION.');
+                ' tiene un TipoMovimiento invalido. Valores: INCLUSION, EXCLUSION.');
             THROW 51111, @errItem, 1;
         END
 
@@ -401,6 +560,37 @@ BEGIN
             THROW 51117, @errItem, 1;
         END
 
+        /* La meta y la fuente tienen que estar ASIGNADAS A ESTA AREA USUARIA.
+
+           Que existan en la entidad no basta: SIG_METAS_X_CENTRO es la tabla con
+           la que SIGA delimita con que metas y con que fuentes puede programar
+           cada centro de costo, y es la misma que ahora filtra los combos del
+           formulario. Sin esta comprobacion, un cliente que no use la pantalla
+           -o una pantalla con la lista en cache- podria registrar contra la meta
+           de otra area, que es justamente lo que el negocio pidio impedir.
+
+           Solo sobre INCLUSION: en exclusion la clasificacion no la elige el
+           usuario, se copia de la linea vigente del cuadro, y una linea historica
+           programada bajo una asignacion anterior seguiria siendo excluible. */
+        SET @Orden = NULL;
+        SELECT TOP 1 @Orden = i.Orden
+          FROM #Item AS i
+         WHERE i.TipoMovimiento = 'INCLUSION'
+           AND NOT EXISTS (SELECT 1 FROM siga.vwMetaXCentro AS mc
+                            WHERE mc.AnoEje = @AnoEje AND mc.SecEjec = @SecEjec
+                              AND mc.CentroCosto = @CentroCosto
+                              AND mc.SecFunc = i.SecFunc
+                              AND mc.Origen = i.Origen
+                              AND mc.FuenteFinanc = i.FuenteFinanc);
+        IF @Orden IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT('MAESTRO_META_CENTRO: el item ', @Orden, ' usa la meta ',
+                (SELECT SecFunc FROM #Item WHERE Orden = @Orden), ' con la fuente ',
+                (SELECT CONCAT(Origen, '-', FuenteFinanc) FROM #Item WHERE Orden = @Orden),
+                ', y esa combinacion no esta asignada al centro de costo ', @CentroCosto, ' en SIGA.');
+            THROW 51126, @errItem, 1;
+        END
+
         /* Tarea, que en SIGA vive por centro de costo */
         SET @Orden = NULL;
         SELECT TOP 1 @Orden = i.Orden
@@ -481,38 +671,89 @@ BEGIN
         IF @CodigoEstadoInicial IS NULL
             THROW 51120, 'CONFLICTO_CONFIGURACION: el modulo CMN no tiene estado inicial. Falta ejecutar S001.', 1;
 
+        DECLARE @EsCorreccion bit = CASE WHEN @IdSolicitud IS NULL THEN 0 ELSE 1 END;
         DECLARE @Codigo varchar(40);
-        EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
-
+        DECLARE @CodigoEstado varchar(60);
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @IdExpediente uniqueidentifier;
-        DECLARE @IdSolicitud  uniqueidentifier;
+
+        /* El correlativo SOLO se consume al crear. Una correccion conserva el
+           numero con que el expediente ya circula: es el que un auditor pide y
+           el que figura impreso en el Anexo 3 que ya se genero. */
+        IF @EsCorreccion = 0
+            EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
+        ELSE
+        BEGIN
+            SET @Codigo       = @CodigoEdit;
+            SET @IdExpediente = @IdExpedienteEdit;
+            SET @CodigoEstado = @CodigoEstadoEdit;
+        END
 
         BEGIN TRANSACTION; SET @TranPropia = 1;
 
-        INSERT INTO sigcm.Expediente
-            (Codigo, CodigoModulo, AnoEje, IdUnidadOrigen, CodigoEstado,
-             IdUnidadActual, IdResponsableActual, Version,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@Codigo, 'CMN', @AnoEje, @IdUnidad, @CodigoEstadoInicial,
-             @IdUnidad, @IdUsuario, 1,
-             @Cuenta, @Ahora, @Equipo, @Programa);
+        IF @EsCorreccion = 0
+        BEGIN
+            SET @CodigoEstado = @CodigoEstadoInicial;
 
-        SELECT @IdExpediente = IdExpediente FROM sigcm.Expediente WHERE Codigo = @Codigo;
+            INSERT INTO sigcm.Expediente
+                (Codigo, CodigoModulo, AnoEje, IdUnidadOrigen, CodigoEstado,
+                 IdUnidadActual, IdResponsableActual, Version,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@Codigo, 'CMN', @AnoEje, @IdUnidad, @CodigoEstadoInicial,
+                 @IdUnidad, @IdUsuario, 1,
+                 @Cuenta, @Ahora, @Equipo, @Programa);
 
-        INSERT INTO cmn.Solicitud
-            (IdExpediente, Codigo, AnoEje, SecEjec, CentroCosto, TipoOperacion,
-             Sustento, IdResponsable, DatosAdicionales,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@IdExpediente, @Codigo, @AnoEje, @SecEjec, @CentroCosto, @TipoOperacion,
-             @Sustento, @IdUsuario, @DatosAdicionales,
-             @Cuenta, @Ahora, @Equipo, @Programa);
+            SELECT @IdExpediente = IdExpediente FROM sigcm.Expediente WHERE Codigo = @Codigo;
 
-        SELECT @IdSolicitud = IdSolicitud FROM cmn.Solicitud WHERE IdExpediente = @IdExpediente;
+            INSERT INTO cmn.Solicitud
+                (IdExpediente, Codigo, AnoEje, SecEjec, CentroCosto, TipoOperacion,
+                 TipoInclusion, JustificacionUrgencia,
+                 Sustento, IdResponsable, DatosAdicionales,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@IdExpediente, @Codigo, @AnoEje, @SecEjec, @CentroCosto, @TipoOperacion,
+                 @TipoInclusion, @JustificacionUrgencia,
+                 @Sustento, @IdUsuario, @DatosAdicionales,
+                 @Cuenta, @Ahora, @Equipo, @Programa);
+
+            SELECT @IdSolicitud = IdSolicitud FROM cmn.Solicitud WHERE IdExpediente = @IdExpediente;
+        END
+        ELSE
+        BEGIN
+            /* La correccion NO mueve el expediente: el estado, la unidad y el
+               responsable actual son de la maquina de transiciones, y esto es
+               contenido. Tampoco toca IdResponsable, que es quien figura como
+               solicitante en el Anexo 3: que el jefe corrija una linea no lo
+               convierte en el area que pidio. */
+            UPDATE cmn.Solicitud
+               SET Sustento                      = @Sustento,
+                   TipoInclusion                 = @TipoInclusion,
+                   JustificacionUrgencia         = @JustificacionUrgencia,
+                   DatosAdicionales              = @DatosAdicionales,
+                   UsuarioModificacionAuditoria  = @Cuenta,
+                   FechaModificacionAuditoria    = @Ahora,
+                   EquipoModificacionAuditoria   = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdSolicitud = @IdSolicitud;
+
+            /* Los items se reescriben en bloque en vez de reconciliarse linea
+               por linea. Nada cuelga de un IdSolicitudItem fuera de sus periodos
+               —el mapeo hacia SIGA nace al encolar, y eso ocurre despues de la
+               firma, cuando ya no se puede corregir—, asi que comparar item por
+               item seria complejidad sin ganancia. Los 48 periodos se van por la
+               cascada de su item. */
+            DELETE FROM cmn.SolicitudItem WHERE IdSolicitud = @IdSolicitud;
+
+            UPDATE sigcm.Expediente
+               SET UsuarioModificacionAuditoria  = @Cuenta,
+                   FechaModificacionAuditoria    = @Ahora,
+                   EquipoModificacionAuditoria   = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdExpediente = @IdExpediente;
+        END
 
         /* Los identificadores se capturan con OUTPUT porque NEWSEQUENTIALID es un
            DEFAULT y no hay SCOPE_IDENTITY para uniqueidentifier. */
@@ -554,18 +795,32 @@ BEGIN
              Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
         VALUES
-            (@IdExpediente, NULL, @CodigoEstadoInicial, NULL,
-             'Registro inicial del Anexo 3', @IdUsuario, @CodigoRol, @IdUnidad,
+            (@IdExpediente,
+             /* Sin origen al crear; en una correccion origen y destino son el
+                mismo estado, porque el expediente no se movio. */
+             CASE WHEN @EsCorreccion = 1 THEN @CodigoEstado END,
+             @CodigoEstado, NULL,
+             CASE WHEN @EsCorreccion = 1
+                  THEN 'Correccion del contenido del Anexo 3'
+                  ELSE 'Registro inicial del Anexo 3' END,
+             @IdUsuario, @CodigoRol, @IdUnidad,
              (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
              @Cuenta, @Equipo, @Programa);
 
         COMMIT TRANSACTION; SET @TranPropia = 0;
 
         DECLARE @Items int = (SELECT COUNT(*) FROM #Item);
+        DECLARE @VersionExp int =
+            (SELECT Version FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente);
+        /* En variable y no inline: un EXEC solo admite constantes o variables
+           como argumento, no una expresion CASE. */
+        DECLARE @AccionAud varchar(80) =
+            CASE WHEN @EsCorreccion = 1 THEN 'ACTUALIZAR' ELSE 'REGISTRAR' END;
 
         EXEC sigcm.paRegistrarAuditoria
              @CorrelacionId = @CorrelacionId, @CodigoModulo = 'CMN',
-             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud, @Accion = 'REGISTRAR',
+             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud,
+             @Accion = @AccionAud,
              @Resultado = 'OK', @IdActor = @IdUsuario, @ActorCuenta = @Cuenta,
              @ActorRol = @CodigoRol, @IdActorUnidad = @IdUnidad,
              @OrigenIp = @Ip, @Equipo = @Equipo, @Programa = @Programa,
@@ -576,11 +831,13 @@ BEGIN
                    @IdSolicitud  AS IdSolicitud,
                    @IdExpediente AS IdExpediente,
                    @Codigo       AS Codigo,
-                   @CodigoEstadoInicial AS CodigoEstado,
-                   1 AS Version,
+                   @CodigoEstado AS CodigoEstado,
+                   @VersionExp   AS Version,
                    @Items AS Items,
                    (@Items * 48) AS Periodos,
-                   N'Se realizo el registro satisfactoriamente.' AS mensaje
+                   CASE WHEN @EsCorreccion = 1
+                        THEN N'Se actualizo la solicitud satisfactoriamente.'
+                        ELSE N'Se realizo el registro satisfactoriamente.' END AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
@@ -653,9 +910,13 @@ BEGIN
         SELECT @resultado = (
             SELECT 1 AS estado,
                    s.IdSolicitud, s.Codigo, s.AnoEje, s.SecEjec, s.CentroCosto,
-                   s.TipoOperacion, s.TipoInclusion, s.Sustento, s.FechaSolicitud,
+                   s.TipoOperacion, s.TipoInclusion, s.JustificacionUrgencia,
+                   s.Sustento, s.FechaSolicitud,
                    e.IdExpediente, e.CodigoEstado, e.Version, e.Anulado,
                    Estado = w.Nombre,
+                   PuedeEditar = cmn.fnPuedeEditar(
+                       e.CodigoEstado, @CodigoRol,
+                       CASE WHEN e.IdUnidadActual = @IdUnidad THEN 1 ELSE 0 END),
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
                    CentroCostoNombre = cc.NombreDepend,
                    /* El PDF que vive en el file server, para firmarlo y para
@@ -664,6 +925,11 @@ BEGIN
                       de ver el Anexo se quedaba sin nada que abrir. */
                    DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
                    DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
+                   /* El informe o nota tecnica con que el area usuaria sustenta
+                      la urgencia. Abastecimiento tiene que poder abrirlo desde
+                      el mismo sitio donde evalua la solicitud. */
+                   DocumentoSustentoUrgencia = su.GeneradoDocumento,
+                   NombreSustentoUrgencia    = su.NombreDocumento,
                    Items = JSON_QUERY(COALESCE((
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
@@ -692,6 +958,7 @@ BEGIN
                     AND cc.CentroCosto = s.CentroCosto
               OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
               OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
+              OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_SUSTENTO_URGENCIA') AS su
              WHERE s.IdSolicitud = @IdSolicitud
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
@@ -815,6 +1082,12 @@ BEGIN
                               e.IdExpediente, e.CodigoEstado, e.Version,
                               Estado = w.Nombre,
                               RolResponsable = w.RolResponsable,
+                              /* Si este actor puede corregir el contenido. La
+                                 pantalla no lo deduce del estado: lo pregunta,
+                                 igual que hace con las acciones del flujo. */
+                              PuedeEditar = cmn.fnPuedeEditar(
+                                  e.CodigoEstado, @CodigoRol,
+                                  CASE WHEN e.IdUnidadActual = @IdUnidad THEN 1 ELSE 0 END),
                               Items = (SELECT COUNT(*) FROM cmn.SolicitudItem AS it
                                         WHERE it.IdSolicitud = s.IdSolicitud AND it.Activo = 1),
                               MontoTotal = (SELECT ISNULL(SUM(p.Monto), 0)
@@ -839,6 +1112,10 @@ BEGIN
                                  haya generado. */
                               DocumentoSistemaAnexo3 = a3.GeneradoDocumento,
                               DocumentoSistemaAnexo4 = a4.GeneradoDocumento,
+                              /* El sustento de la urgencia viaja en la bandeja
+                                 porque es ahi donde Abastecimiento decide, y
+                                 abrirlo no debe costar una consulta por fila. */
+                              DocumentoSustentoUrgencia = su.GeneradoDocumento,
                               /* Mismas transiciones que sigcm.paListarTransicionDisponible
                                  para este expediente y este rol. JSON_QUERY evita
                                  que FOR JSON las escape como texto. */
@@ -887,6 +1164,7 @@ BEGIN
                                          AND ps.Activo = 1 AND pk.Anulado = 0) AS pq
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
+                         OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_SUSTENTO_URGENCIA') AS su
                          OUTER APPLY (
                              SELECT TOP 1 o.CodigoEstadoRetorno
                                FROM sigcm.Observacion AS o

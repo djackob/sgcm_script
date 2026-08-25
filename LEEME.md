@@ -120,6 +120,8 @@ Todo lo referente al SIGA: instalarlo, entenderlo e integrarse con su base.
 | `S902__continuar_anexo4.sql` | Retoma un expediente en `CMN_A3_APROBADO` | **sí** | sí |
 | `S903__prueba_anexo4_multiple.sql` | Anexo 4 con dos áreas; regresión del flujo | no | no, se limpia sola |
 | `S904__casos_anexo4_multiple.sql` | Deja 4 Anexos 3 en borrador, uno por área real | no | sí, esa es la idea |
+| `S905__limpiar_expedientes_cmn.sql` | **Borra** los expedientes CMN y reinicia el correlativo. Exige `-v confirmar="SI"` | no | sí: los retira |
+| `S906__prueba_edicion_cmn.sql` | Corregir y anular un Anexo 3: quién, desde qué estado | no | no, se limpia sola |
 
 **Por qué el bloque 4 no es una carpeta aparte.** Los casos de prueba son
 scripts de base de datos que el instalador ejecuta (`instalar.ps1

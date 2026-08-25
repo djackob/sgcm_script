@@ -202,10 +202,15 @@ BEGIN
     SET @ActorEsp  = N'"Actor":{"Usuario":"' + @CuentaEsp  + N'","Rol":"AREA_ESPECIALISTA","Unidad":"' + @Unidad + N'","Equipo":"S903","Programa":"S903"}';
     SET @ActorJefe = N'"Actor":{"Usuario":"' + @CuentaJefe + N'","Rol":"AREA_JEFE","Unidad":"' + @Unidad + N'","Equipo":"S903","Programa":"S903"}';
 
+    /* La solicitud se registra EXTRAORDINARIA a proposito: si fuera ORDINARIA,
+       la prueba solo pasaria los viernes. La regla del viernes se comprueba
+       aparte, mas abajo, retipificando las dos solicitudes. */
     SET @p = N'{' + @ActorEsp + N',
       "Solicitud": { "AnoEje": ' + CONVERT(varchar(4), @AnoEje) + N', "SecEjec": ' + CONVERT(varchar(10), @SecEjec) + N',
                      "CentroCosto": "' + @CentroCosto + N'", "TipoOperacion": "MODIFICACION",
-                     "Sustento": "Prueba S903: inclusion del area ' + @Unidad + N' para el Anexo 4 multiple." },
+                     "Sustento": "Prueba S903: inclusion del area ' + @Unidad + N' para el Anexo 4 multiple.",
+                     "TipoInclusion": "EXTRAORDINARIA",
+                     "JustificacionUrgencia": "Prueba S903: la necesidad no puede esperar al Anexo 4 ordinario del viernes." },
       "Items": [ { "TipoMovimiento": "INCLUSION",
                    "TipoTarea": "' + @TipoTarea + N'", "NivelTarea": "' + @NivelTarea + N'",
                    "CodigoTarea": ' + CONVERT(varchar(10), @CodigoTarea) + N', "SecFunc": ' + CONVERT(varchar(10), @SecFunc) + N',
@@ -247,9 +252,9 @@ INSERT INTO @Paso (quien, codigo, firma, extra) VALUES
     ('OA',    'CMN_OA_DERIVAR',            0, NULL),
     ('ABJE',  'CMN_ABAST_JEFE_DERIVAR',    0, NULL),
     ('ABCO',  'CMN_ABAST_COORD_DERIVAR',   0, NULL),
-    /* URGENTE a proposito: si fuera ORDINARIA, la prueba solo pasaria los
-       viernes. La regla del viernes se comprueba aparte, mas abajo. */
-    ('ABES',  'CMN_ABAST_ESP_FIRMAR_A3',   1, N',"TipoInclusion":"URGENTE"'),
+    /* Sin TipoInclusion: la tipificacion la declaro el area usuaria al registrar
+       y esta transicion ya no la escribe. */
+    ('ABES',  'CMN_ABAST_ESP_FIRMAR_A3',   1, NULL),
     ('ABCO',  'CMN_ABAST_COORD_FIRMAR_A3', 1, NULL),
     ('ABJE',  'CMN_ABAST_JEFE_FIRMAR_A3',  1, NULL);
 
@@ -351,7 +356,7 @@ END
 /* 3. La regla del viernes                                                     */
 /* -------------------------------------------------------------------------- */
 /*
-  Los dos Anexos 3 se conformaron como URGENTE, asi que generar debe poder
+  Los dos Anexos 3 se registraron como EXTRAORDINARIA, asi que generar debe poder
   hacerse hoy sea el dia que sea. Se comprueba ademas el rechazo: se marca uno
   como ORDINARIA, se intenta generar y se espera REGLA_CALENDARIO cualquier dia
   que no sea viernes.
@@ -410,8 +415,8 @@ BEGIN
     DELETE FROM cmn.Paquete WHERE ProgramaCreacionAuditoria = 'S903';
 END
 
-/* Se devuelven a URGENTE para poder seguir cualquier dia de la semana. */
-UPDATE cmn.Solicitud SET TipoInclusion = 'URGENTE'
+/* Se devuelven a EXTRAORDINARIA para poder seguir cualquier dia de la semana. */
+UPDATE cmn.Solicitud SET TipoInclusion = 'EXTRAORDINARIA'
  WHERE IdSolicitud IN (TRY_CONVERT(uniqueidentifier, @IdSolA), TRY_CONVERT(uniqueidentifier, @IdSolB));
 
 /* -------------------------------------------------------------------------- */

@@ -170,6 +170,163 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-08-24 (tarde) — Corregir y anular: el pendiente que llevaba cuatro días
+
+**Qué pidió el negocio.** Cuatro cosas, sobre lo entregado esa mañana:
+
+1. Quitar del formulario del Anexo 3 los textos de indicaciones.
+2. Que esa no vuelva a ser una decisión del programador: **no se agrega texto
+   informativo que nadie pidió.**
+3. Devolver el PDF del Anexo 3 a su formato: no se le agregan tipo ni
+   justificación, porque el formato de la Directiva no los tiene.
+4. Editar y eliminar: **puede hacerlo quien lo creó —el especialista del área
+   usuaria o su jefe— mientras no esté firmado y no haya pasado a OA**; y si OA
+   o Abastecimiento observan y el expediente vuelve, el área tiene que poder
+   corregirlo, normalmente después de que el jefe lo derive al especialista.
+   Y, si se podía, borrar la data de prueba en vez de arrastrarla.
+
+**Qué se construyó:**
+
+| Pieza | Dónde |
+|---|---|
+| `cmn.fnPuedeEditar` — quién, desde qué estado, en qué unidad | `db/10_api/F002` |
+| `paRegistrarSolicitud` aprende a **corregir** cuando llega `IdSolicitud` | `db/10_api/F002` |
+| `PuedeEditar` en la bandeja y en el detalle | `db/10_api/F002` |
+| Retirar los expedientes CMN y reiniciar el correlativo | `db/90_pruebas/S905__limpiar_expedientes_cmn.sql` |
+| Prueba de corregir y anular, repetible y que se limpia sola | `db/90_pruebas/S906__prueba_edicion_cmn.sql` |
+| La regla: no se agrega texto informativo que nadie pidió | `ESTANDARES.md`, sección 4.7 |
+| Formulario sin notas; el PDF del Anexo 3, como estaba | `../../anin_scm_front/…/gestion-cmn/` |
+
+**Decisiones que no hay que volver a discutir:**
+
+- **Corregir no es registrar de nuevo, y por eso no consume correlativo.** El
+  expediente conserva su código: es el número con el que circula y con el que un
+  auditor lo pide. Antes `IdSolicitud` se leía y se descartaba en silencio, así
+  que subsanar creaba un expediente nuevo y dejaba el observado vivo. Era el
+  pendiente 1 del 2026-08-20.
+- **Es la misma rutina y no una nueva.** Crear y corregir comparten las quince
+  validaciones contra los maestros de SIGA; partirlas en dos procedimientos
+  habría dejado dos copias que terminan diciendo cosas distintas. Lo único que
+  se ramifica es dónde aterriza el resultado.
+- **Corregir no mueve el expediente.** Estado, unidad y responsable actual son de
+  la máquina de transiciones; esto es contenido. Tampoco cambia `IdResponsable`:
+  que el jefe corrija una línea no lo convierte en el área que pidió.
+- **Los ítems se reescriben en bloque.** Nada cuelga de un `IdSolicitudItem`
+  fuera de sus 48 períodos —el mapeo hacia SIGA nace al encolar, y eso ocurre
+  después de la firma, cuando ya no se puede corregir—, así que reconciliar línea
+  por línea sería complejidad sin ganancia.
+- **Los estados editables son cinco**, y la lista vive una sola vez en
+  `cmn.fnPuedeEditar`: `CMN_BORRADOR`, `CMN_PEND_FIRMA_A3` y los tres del retorno
+  observado (`CMN_OBS_AU_JEFE`, `CMN_OBS_AU_COORD`, `CMN_OBSERVADO`). Fuera
+  quedan `CMN_A3_FIRMADO` —corregir después de la firma es rehacer el documento,
+  no editarlo— y los `CMN_SUBS_*`, donde el área ya declaró subsanado.
+- **El jefe corrige aunque el turno sea del especialista.** Lo pidió el negocio:
+  el jefe que encuentra un error al ir a firmar no tiene que devolverlo para que
+  se lo arreglen. Los tres candados son estar en un estado editable, que el
+  expediente esté **en la unidad** del actor y que el actor ejerza un rol del
+  área usuaria.
+- **La pantalla pregunta si puede editar; no lo deduce.** `PuedeEditar` sale de
+  la misma función que aplica la rutina al guardar. La regla que vivía en el
+  front —estado `CMN_OBSERVADO` y rol especialista— era más estrecha que el
+  flujo real.
+- **Eliminar no hizo falta construirlo.** `CMN_ANULAR_BORRADOR` y
+  `CMN_ANULAR_FIRMA_PEND` están en la semilla desde el principio, con sus roles,
+  y la bandeja las pinta como cualquier otra acción. Agregar un «borrar» aparte
+  habría sido una segunda forma de anular, fuera de la máquina de estados.
+
+**Cómo se prueba.** `db/90_pruebas/S906__prueba_edicion_cmn.sql`: registra,
+corrige como especialista y como jefe, comprueba que Abastecimiento no puede,
+que después de la firma tampoco, que devuelto observado vuelve a poder, y que la
+anulación está habilitada. No toca SIGA y se limpia sola. `S903` sigue en verde.
+
+**Sobre la data de prueba.** Se corrió `S905` y la base quedó con **cero
+expedientes CMN**: con eso desaparece el pendiente de los expedientes sin
+tipificar, porque ya no hay ninguno. Lo que la integración escribió en su día en
+`SIGA_1750` **sigue ahí**, a propósito: sobre SIGA solo escribe el flujo.
+
+---
+
+### 2026-08-24 — El Anexo 3 se tipifica al nacer y los combos ven solo lo del área
+
+**Qué pidió el negocio.** Cuatro observaciones sobre el registro del CMN:
+
+1. Retirar «Modificación» del combo de ítem.
+2. Que el combo de tarea arranque en «Seleccione».
+3. Filtrar los desplegables según el perfil con que se ingresó, usando
+   `SIG_METAS_X_CENTRO`, que es la tabla con la que SIGA relaciona el centro de
+   costo con sus metas y fuentes. En palabras del cliente: *«si ingresa el
+   usuario de Soporte, solo debe visualizar las fuentes asociadas a su meta —RO—
+   y no canon o donaciones»*.
+4. Tipificar la solicitud como **ordinaria o extraordinaria desde el inicio**,
+   exigir justificación escrita a la extraordinaria y habilitar un archivo de
+   sustento para que Abastecimiento valide la urgencia. Y **quitar esa elección
+   del formulario de Abastecimiento**, que es donde estaba.
+
+**Qué se construyó:**
+
+| Pieza | Dónde |
+|---|---|
+| Sinónimo y vista `siga.vwMetaXCentro` sobre `SIG_METAS_X_CENTRO` | `00_servidor/C003`, `db/00_ddl/V004` |
+| `JustificacionUrgencia`; `URGENTE` → `EXTRAORDINARIA` en las dos tablas | `db/00_ddl/V012__cmn_tipificacion_solicitud.sql` |
+| `META` y `FUENTE_FINANC` delimitados por `CentroCosto`; maestro `META_X_CENTRO` | `db/10_api/F001` |
+| Rechazo de `MODIFICACION` (51125), tipificación obligatoria (51122-51124), meta/fuente del centro (51126) | `db/10_api/F002` |
+| `TipoInclusion` deja de escribirse en la transición | `db/10_api/F004` |
+| Tipo de documento `CMN_SUSTENTO_URGENCIA`, sin firmas | `db/20_seed/S001` |
+| Tipo de solicitud, justificación y adjunto en el registro | `../../anin_scm_front/…/modals/modal-registro/` |
+| El panel de Abastecimiento muestra el tipo, ya no lo elige | `../../anin_scm_front/…/gestion-cmn.component.{ts,html}` |
+| Tipo y justificación impresos en el Anexo 3 | `../../anin_scm_front/…/documentos/anexo3.pdfmake.ts` |
+
+**Decisiones que no hay que volver a discutir:**
+
+- **«Modificación» no era un valor erróneo, era una vía que el formato no tiene.**
+  El Anexo 3 oficial trae dos pares de columnas —exclusión e inclusión— y ninguna
+  tercera. Cambiar la cantidad de un ítem programado se expresa excluyendo la
+  línea vigente e incluyéndola con la cantidad nueva, que es lo que el área
+  usuaria firma tal como se imprime. El valor **sigue vivo en el modelo** y W001
+  sabe proyectarlo, porque hay expedientes históricos con esa marca; lo que se
+  rechaza es registrar uno nuevo, y el mensaje dice qué hacer en su lugar.
+- **El combo de tarea no estaba «sin opción por defecto»: la opción no encajaba.**
+  El `<option>` valía `"null|null|null"` y un ítem recién creado producía la clave
+  `"||null"`. Angular no encontraba coincidencia y pintaba un blanco implícito.
+  Ahora ambos lados valen cadena vacía.
+- **La delimitación por perfil es de SIGA, no nuestra.** `SIG_METAS_X_CENTRO` es
+  la misma tabla con la que el propio SIGA arma esos combos: 574 filas para 38
+  centros en 2026. Verificado que las metas que declara por centro coinciden una
+  a una con las de `SIG_TECHO_PRESUPUESTO`, así que filtrar por ahí no esconde
+  ninguna combinación con techo. Sin `CentroCosto` los maestros siguen
+  devolviendo la lista completa: Abastecimiento consulta transversalmente.
+- **Filtrar en el combo no basta: la rutina también valida.** `paRegistrarSolicitud`
+  comprueba meta + fuente contra el centro de costo (51126) y solo sobre
+  inclusiones —en una exclusión la clasificación se copia de la línea vigente del
+  cuadro, y una línea histórica programada bajo otra asignación sigue siendo
+  excluible—.
+- **`URGENTE` pasó a llamarse `EXTRAORDINARIA`.** Es el mismo eje con dos nombres:
+  el de la regla del viernes y el de la Directiva. Mantener los dos obligaría a
+  traducir entre pantalla y tabla. Se renombró el valor, no la columna, y la regla
+  del calendario no cambió.
+- **La tipificación se mudó al registro y no se acepta «por si viene».** F004 ya
+  no la escribe ni siquiera cuando llega en el POST: una transición que pudiera
+  sobrescribirla borraría la justificación que la respalda —son un solo hecho—.
+- **El archivo de sustento es un documento del expediente, no un adjunto.** Sube
+  por el mismo file server y se registra con `sigcm.paRegistrarDocumento`, así
+  hereda versionado, trazabilidad y el visor que Abastecimiento ya usa. Es
+  **opcional**: obligatorio es el texto. Si el archivo falla, la solicitud no se
+  deshace; se avisa y puede readjuntarse editando el borrador.
+- **`TipoInclusion` sigue admitiendo nulo.** Ninguna solicitud nueva nace sin
+  tipo, pero volver la columna `NOT NULL` obligaría a inventarle uno a las
+  anteriores. Un dato inventado en una columna que decide un plazo es peor que un
+  nulo que la rutina rechaza al primer intento de avanzar. Por lo mismo, la
+  restricción de la justificación entra `WITH NOCHECK`.
+
+**Cómo se prueba.** Sin SIGA. `instalar.ps1` aplica los 28 scripts (dos pasadas,
+idempotente) y `db/90_pruebas/S903` recorre el circuito completo con dos áreas y
+se limpia sola. Comprobado además que `META` sin centro devuelve 487 metas y con
+`01.01` una sola; `FUENTE_FINANC`, 9 y una (`1-00`, Recursos Ordinarios); y que
+el registro rechaza con 51125, 51122, 51124 y 51126 sin que nazca ninguna
+solicitud.
+
+---
+
 ### 2026-08-20 (noche) — La firma: el PDF que la bandeja no sabía encontrar
 
 **Qué pidió el negocio.** Integrar lo que el otro desarrollador hizo con la
@@ -242,12 +399,12 @@ Anexo de una fila firmada —antes del cambio, el botón no tenía qué abrir.
 
 **Pendientes — dos defectos abiertos y una pieza que no llegó:**
 
-1. **`cmn.paRegistrarSolicitud` no sabe actualizar.** Su `OPENJSON` no lee
-   `IdSolicitud` y el `INSERT INTO sigcm.Expediente` es incondicional, así que
-   **subsanar una observación crea un expediente nuevo con correlativo nuevo**
-   en lugar de corregir el existente; el `IdSolicitud` que el front envía al
-   editar se descarta en silencio. Hasta arreglarlo no se puede ofrecer editar
-   un borrador, que es lo que pidió el negocio.
+1. ~~**`cmn.paRegistrarSolicitud` no sabe actualizar.**~~ **Resuelto el
+   2026-08-24 (tarde).** Su `OPENJSON` no leía `IdSolicitud` y el `INSERT INTO
+   sigcm.Expediente` era incondicional, así que subsanar una observación creaba
+   un expediente nuevo con correlativo nuevo. Ahora la rutina distingue registrar
+   de corregir y `cmn.fnPuedeEditar` decide quién puede hacerlo y desde qué
+   estado.
 2. **La firma digital ONPE no está en la entrega.** El bloque `firma`
    (`ruta_js`, `ruta_metodo`, `ruta_iframe`, `ruta_carpeta`, `ruta_respuesta`,
    `ruta_archivo`) está **declarado en `AppConfig` de los dos proyectos pero no
@@ -271,7 +428,9 @@ el clasificador queda vacío y la pantalla no explica por qué. Las combinacione
 válidas en 2026 (fuente `1-00` en todas) son: US `01.07.05.02` meta 14 (13
 clasificadores), ORH `01.07.04` meta 18 (11), OGP `01.06.03` metas 257 y 6,
 UDS `01.07.05.01` meta 11, UOP `01.01` meta 5, OTI `01.07.05.03` meta 15 (2).
-Filtrar las metas por techo del centro de costo queda pendiente.
+~~Filtrar las metas por techo del centro de costo queda pendiente.~~ **Resuelto el
+2026-08-24**: el desplegable ya solo trae las metas y fuentes que
+`SIG_METAS_X_CENTRO` asigna al centro de costo del perfil.
 
 ---
 

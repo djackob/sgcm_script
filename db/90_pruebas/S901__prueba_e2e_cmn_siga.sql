@@ -122,7 +122,9 @@ PRINT '  Item catalogo   : S-' + @GrupoBien + '-' + @ClaseBien + '-' + @FamiliaB
 SET @p = N'{' + @ActorEsp + N',
   "Solicitud": { "AnoEje": 2026, "SecEjec": 1750, "CentroCosto": "' + @CentroCosto + N'",
                  "TipoOperacion": "MODIFICACION",
-                 "Sustento": "Prueba S901: inclusion de servicio para demostrar el registro en SIGA." },
+                 "Sustento": "Prueba S901: inclusion de servicio para demostrar el registro en SIGA.",
+                 "TipoInclusion": "EXTRAORDINARIA",
+                 "JustificacionUrgencia": "Prueba S901: se registra extraordinaria para que el Anexo 4 pueda generarse cualquier dia." },
   "Items": [ { "TipoMovimiento": "INCLUSION",
                "TipoTarea": "' + @TipoTarea + N'", "NivelTarea": "' + @NivelTarea + N'",
                "CodigoTarea": ' + CONVERT(varchar(10), @CodigoTarea) + N', "SecFunc": ' + CONVERT(varchar(10), @SecFunc) + N',
@@ -262,12 +264,11 @@ BEGIN
     PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
         + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
 
-    /* El tipo de modificacion se declara junto con la conformidad del
-       especialista. De el depende despues la regla del viernes. */
+    /* El tipo de modificacion NO viaja aqui: lo declaro el area usuaria al
+       registrar la solicitud, y de el depende la regla del viernes. */
     SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente
            + N'","CodigoTransicion":"' + @cd
            + N'","Version":' + CONVERT(varchar(10), @Version)
-           + CASE WHEN @cd = 'CMN_ABAST_ESP_FIRMAR_A3' THEN N',"TipoInclusion":"URGENTE"' ELSE N'' END
            + N'}';
     DELETE FROM @r; INSERT INTO @r EXEC sigcm.paEjecutarTransicion @p;
     SELECT @j = j FROM @r;

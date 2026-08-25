@@ -166,7 +166,8 @@ BEGIN
         + N', "SecEjec": ' + CONVERT(varchar(10), @SecEjec)
         + N', "CentroCosto": "' + @CentroCosto + N'",
                      "TipoOperacion": "MODIFICACION",
-                     "Sustento": "' + REPLACE(@Sustento, '"', '\"') + N'" },
+                     "Sustento": "' + REPLACE(@Sustento, '"', '\"') + N'",
+                     "TipoInclusion": "ORDINARIA" },
       "Items": [ { "TipoMovimiento": "INCLUSION",
                    "TipoTarea": "' + @TipoTarea + N'", "NivelTarea": "' + @NivelTarea + N'",
                    "CodigoTarea": ' + CONVERT(varchar(10), @CodigoTarea)
@@ -241,7 +242,7 @@ PRINT '   2. Jefe del area          -> Firmar Anexo 3 y Enviar a la OA';
 PRINT '   3. prueba.oa              -> Derivar al Jefe de Abastecimiento';
 PRINT '   4. prueba.abast.jefe      -> Derivar al Coordinador';
 PRINT '   5. prueba.abastecim       -> Derivar al Especialista';
-PRINT '   6. prueba.abast.esp       -> Conformar y firmar (marcar URGENTE)';
+PRINT '   6. prueba.abast.esp       -> Conformar y firmar el Anexo 3';
 PRINT '   7. prueba.abastecim       -> Firmar Anexo 3';
 PRINT '   8. prueba.abast.jefe      -> Firmar Anexo 3   <<< SE REGISTRA EN SIGA';
 PRINT '   9. Repetir 1 a 8 con las otras areas';
@@ -249,9 +250,11 @@ PRINT '  10. prueba.abast.esp       -> marcar las cuatro y "Generar Anexo 4 mult
 PRINT '  11. prueba.abastecim       -> Firmar Anexo 4';
 PRINT '  12. prueba.abast.jefe      -> Firmar Anexo 4  <<< SE APRUEBA EN SIGA';
 PRINT '';
-PRINT '  ORDINARIO frente a URGENTE: si en el paso 6 se marca ORDINARIA, el';
-PRINT '  Anexo 4 solo se podra generar un viernes. Marcar URGENTE para probar';
-PRINT '  cualquier dia.';
+PRINT '  ORDINARIA frente a EXTRAORDINARIA: lo declara el AREA USUARIA al';
+PRINT '  registrar el Anexo 3, no Abastecimiento. Estos cuatro casos quedan';
+PRINT '  ORDINARIOS, asi que su Anexo 4 solo se genera un viernes; para probar';
+PRINT '  cualquier dia, registre uno a mano marcandolo EXTRAORDINARIA y';
+PRINT '  justificando la urgencia.';
 PRINT '';
 PRINT '  Para VER el registro en el aplicativo SIGA:';
 PRINT '    Logistica > Programacion > Modificacion de C.M.N. > Bienes, Servicios y Obras';

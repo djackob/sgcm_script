@@ -588,34 +588,23 @@ BEGIN
 
         /* ---- Dato del modulo que la accion trae consigo ---------------- */
         /*
-          TipoInclusion es la decision del paso 6 del flujo: al conformar el
-          Anexo 3, el especialista de Abastecimiento declara si la modificacion
-          es ordinaria o urgente. De esa marca depende despues la regla del
-          viernes al generar el Anexo 4.
+          LA TIPIFICACION YA NO SE ESCRIBE AQUI.
 
-          Viaja en el mismo POST que la transicion y no en una rutina aparte
-          porque es parte de la misma decision: no existe conformar sin decidir
-          el tipo. La columna es de cmn.Solicitud desde V005 y hasta ahora
-          ninguna rutina la escribia; el frontend ya la mandaba y se perdia.
+          Hasta ahora, al conformar el Anexo 3, el especialista de Abastecimiento
+          declaraba si la modificacion era ordinaria o urgente y esta rutina
+          guardaba esa marca en cmn.Solicitud. El negocio la movio a su sitio: la
+          declara el AREA USUARIA al registrar la solicitud (cmn.paRegistrarSolicitud),
+          porque de ella depende el plazo -el Anexo 4 ordinario se genera los
+          viernes, el extraordinario cualquier dia- y quien conoce la urgencia es
+          quien tiene la necesidad, no quien la evalua despues.
+
+          El bloque no se convierte en "acepta el dato si viene": una transicion
+          que pudiera sobrescribir la tipificacion borraria la justificacion que
+          la respalda -son un solo hecho- sin que nadie lo pidiera. Si llega
+          TipoInclusion en el POST, se ignora.
+
+          El error 51224 queda libre dentro del bloque 51200-51299.
         */
-        DECLARE @TipoInclusion varchar(15) =
-            NULLIF(LTRIM(RTRIM(JSON_VALUE(@parametro, '$.TipoInclusion'))), '');
-
-        IF @TipoInclusion IS NOT NULL
-        BEGIN
-            IF @TipoInclusion NOT IN ('ORDINARIA','URGENTE')
-                THROW 51224, 'VALIDACION_PAYLOAD: TipoInclusion debe ser ORDINARIA o URGENTE.', 1;
-
-            UPDATE s
-               SET s.TipoInclusion = @TipoInclusion,
-                   s.UsuarioModificacionAuditoria = @Cuenta,
-                   s.FechaModificacionAuditoria   = @Ahora,
-                   s.EquipoModificacionAuditoria  = @Equipo,
-                   s.ProgramaModificacionAuditoria = @Programa
-              FROM cmn.Solicitud AS s
-              JOIN @Lote AS l ON l.IdExpediente = s.IdExpediente
-             WHERE s.Activo = 1;
-        END
 
         /* ---- Encolado hacia SIGA -------------------------------------- */
         /*

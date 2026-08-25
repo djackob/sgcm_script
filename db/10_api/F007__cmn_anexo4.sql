@@ -33,7 +33,7 @@
   ---------------------------------------------------------------------------
   LA REGLA DEL VIERNES
   ---------------------------------------------------------------------------
-  Un paquete ORDINARIO solo se genera los viernes; uno URGENTE, cualquier dia.
+  Un paquete ORDINARIO solo se genera los viernes; uno EXTRAORDINARIO, cualquier dia.
   Se comprueba con DATEDIFF contra una fecha conocida y no con DATEPART(weekday),
   que depende de SET DATEFIRST y por lo tanto de la sesion: la misma consulta
   daria distinto segun quien la ejecute, y una regla de calendario que cambia con
@@ -184,33 +184,35 @@ BEGIN
         SELECT TOP 1 @AnoEje = s.AnoEje, @SecEjec = s.SecEjec
           FROM @Sel AS x JOIN cmn.Solicitud AS s ON s.IdSolicitud = x.IdSolicitud;
 
-        /* ---- Ordinario o urgente -------------------------------------- */
+        /* ---- Ordinaria o extraordinaria ------------------------------- */
         /*
-          Lo declaro el especialista al conformar cada Anexo 3. El paquete hereda
-          esa marca y por eso tiene que ser la misma en todos: si se admitiera
-          mezclar, bastaria con incluir un urgente para generar un martes todo lo
-          ordinario, y la restriccion de fecha dejaria de restringir nada.
+          Lo declara el AREA USUARIA al registrar cada Anexo 3, y una solicitud
+          extraordinaria trae ademas la justificacion escrita de la urgencia. El
+          paquete hereda esa marca y por eso tiene que ser la misma en todos: si
+          se admitiera mezclar, bastaria con incluir una extraordinaria para
+          generar un martes todo lo ordinario, y la restriccion de fecha dejaria
+          de restringir nada.
         */
         DECLARE @TiposDistintos int;
         SELECT @TiposDistintos = COUNT(DISTINCT ISNULL(s.TipoInclusion, '(sin definir)'))
           FROM @Sel AS x JOIN cmn.Solicitud AS s ON s.IdSolicitud = x.IdSolicitud;
 
         IF @TiposDistintos > 1
-            THROW 51706, 'CONFLICTO_SELECCION: hay Anexos 3 ordinarios y urgentes en la misma seleccion. Genere un Anexo 4 para cada tipo.', 1;
+            THROW 51706, 'CONFLICTO_SELECCION: hay Anexos 3 ordinarios y extraordinarios en la misma seleccion. Genere un Anexo 4 para cada tipo.', 1;
 
         DECLARE @TipoInclusion varchar(15);
         SELECT TOP 1 @TipoInclusion = s.TipoInclusion
           FROM @Sel AS x JOIN cmn.Solicitud AS s ON s.IdSolicitud = x.IdSolicitud;
 
         IF @TipoInclusion IS NULL
-            THROW 51707, 'VALIDACION_DATOS: los Anexos 3 marcados no tienen definido si son ordinarios o urgentes. Debio declararse al conformarlos.', 1;
+            THROW 51707, 'VALIDACION_DATOS: los Anexos 3 marcados no tienen definido si son ordinarios o extraordinarios. Se declara al registrar la solicitud; estos son anteriores a esa regla y hay que retipificarlos.', 1;
 
         /* ---- La regla del viernes ------------------------------------- */
         DECLARE @EsViernes bit =
             CASE WHEN DATEDIFF(day, '19000101', CONVERT(date, GETDATE())) % 7 = 4 THEN 1 ELSE 0 END;
 
         IF @TipoInclusion = 'ORDINARIA' AND @EsViernes = 0 AND @Forzar = 0
-            THROW 51708, 'REGLA_CALENDARIO: los Anexos 4 ordinarios se generan los viernes. Para una modificacion que no puede esperar, el Anexo 3 debe conformarse como URGENTE.', 1;
+            THROW 51708, 'REGLA_CALENDARIO: los Anexos 4 ordinarios se generan los viernes. Una modificacion que no puede esperar tiene que haberse registrado como EXTRAORDINARIA, con su justificacion.', 1;
 
         /* ---- Creacion -------------------------------------------------- */
         DECLARE @Ahora datetime = GETDATE();
@@ -322,7 +324,7 @@ BEGIN
                Solicitudes = JSON_QUERY(COALESCE((
                    SELECT ps.Orden,
                           s.IdSolicitud, s.Codigo, s.CentroCosto, s.Sustento,
-                          s.TipoOperacion, s.TipoInclusion,
+                          s.TipoOperacion, s.TipoInclusion, s.JustificacionUrgencia,
                           FechaSolicitud = CONVERT(varchar(10), s.FechaSolicitud, 126),
                           e.IdExpediente,
                           CodigoExpediente = e.Codigo,

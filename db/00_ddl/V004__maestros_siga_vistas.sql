@@ -69,9 +69,10 @@
   f) monto_techo_1..3 se mapeaban a columnas inexistentes. Ver la nota extensa en
      vwTechoPresupuesto.
 
-  Dos vistas son nuevas, sin equivalente en PostgreSQL: vwCuadroEtapaCentro y
-  vwParametroEjecutoraAnio. Cubren los hallazgos 5.3 y 5.4 de
-  SIGCM/docs/mapa-siga-cmn.md.
+  Tres vistas son nuevas, sin equivalente en PostgreSQL: vwCuadroEtapaCentro y
+  vwParametroEjecutoraAnio, que cubren los hallazgos 5.3 y 5.4 de
+  SIGCM/docs/mapa-siga-cmn.md, y vwMetaXCentro, que es la que delimita metas y
+  fuentes por area usuaria.
 
   Nomenclatura: las vistas exponen columnas en PascalCase, como el resto del
   SIGCM. Los nombres de origen en SIGA quedan a la vista en cada CONVERT.
@@ -179,6 +180,51 @@ SELECT
     Estado      = CONVERT(varchar(1),   t.estado)       COLLATE DATABASE_DEFAULT,
     Activo      = CONVERT(bit, CASE WHEN t.estado = 'A' THEN 1 ELSE 0 END)
 FROM siga.SIG_CENTRO_COSTO_TAREA AS t WITH (NOLOCK);
+GO
+
+/* ========================================================================== */
+/* 4bis. Metas y fuentes habilitadas por area usuaria                        */
+/*       <- dbo.SIG_METAS_X_CENTRO                                           */
+/* ========================================================================== */
+
+/*
+  VISTA NUEVA, sin equivalente en la version PostgreSQL.
+
+  ES LA QUE DELIMITA LOS COMBOS POR PERFIL. En SIGA cada area usuaria tiene
+  asignadas sus metas presupuestales y, dentro de cada una, las fuentes de
+  financiamiento con las que puede programar. Esta tabla es esa asignacion: 574
+  filas para 38 centros de costo en 2026, con el grano
+  (centro_costo, sec_func, origen, fuente_financ).
+
+  Sin este filtro el formulario del Anexo 3 ofrecia las 487 metas de la entidad
+  y las 100 fuentes de la ejecutora, cuando el area usuaria tiene una sola meta
+  y una sola fuente en casi todos los casos: el usuario elegia combinaciones sin
+  techo y la pantalla no explicaba por que el clasificador quedaba vacio.
+
+  Verificado contra SIGA_1750 (2026): las metas que declara esta tabla para un
+  centro coinciden una a una con las de SIG_TECHO_PRESUPUESTO para ese centro
+  —01.01 meta 5, 01.07.04 meta 18, 01.06.03 metas 6 y 257, 01.07.05.03 meta 15—,
+  de modo que filtrar por aqui no esconde ninguna combinacion con techo.
+
+  CON NOLOCK: es una asignacion de gestion, cuasi estatica como los demas
+  maestros que alimentan formularios. El techo, que si se mueve, sigue leyendose
+  sin NOLOCK por vwTechoPresupuesto.
+*/
+CREATE OR ALTER VIEW siga.vwMetaXCentro
+AS
+SELECT
+    AnoEje       = CONVERT(smallint, m.ano_eje),
+    SecEjec      = CONVERT(int,      m.sec_ejec),
+    CentroCosto  = CONVERT(varchar(15), m.centro_costo)  COLLATE DATABASE_DEFAULT,
+    Secuencia    = CONVERT(bigint,      m.secuencia),
+    SecFunc      = CONVERT(int,         m.sec_func),
+    Origen       = CONVERT(varchar(1),  m.origen)         COLLATE DATABASE_DEFAULT,
+    FuenteFinanc = CONVERT(varchar(2),  m.fuente_financ)  COLLATE DATABASE_DEFAULT,
+    TipoRecurso  = CONVERT(varchar(2),  m.tipo_recurso)   COLLATE DATABASE_DEFAULT,
+    PorcTecho    = CONVERT(decimal(18,2), m.porc_techo),
+    PorcGFijos   = CONVERT(decimal(18,2), m.porc_gfijos),
+    FechaReg     = m.fecha_reg
+FROM siga.SIG_METAS_X_CENTRO AS m WITH (NOLOCK);
 GO
 
 /* ========================================================================== */
@@ -461,5 +507,5 @@ SELECT
 FROM siga.SIG_PARAMETRO_EJECUTORA_ANIO AS p WITH (NOLOCK);
 GO
 
-PRINT 'V004 aplicada: 10 vistas sobre SIGA, cero tablas espejo.';
+PRINT 'V004 aplicada: 11 vistas sobre SIGA, cero tablas espejo.';
 GO

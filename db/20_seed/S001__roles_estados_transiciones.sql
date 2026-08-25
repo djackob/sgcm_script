@@ -276,7 +276,15 @@ INSERT INTO @TipoDoc VALUES
   ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',
    'Solicitud de modificacion del Cuadro Multianual de Necesidades', 'Anexo 3', 0),
   ('CMN_ANEXO_4_APROBACION_MODIFICACION',
-   'Aprobacion de modificaciones al Cuadro Multianual de Necesidades', 'Anexo 4', 1);
+   'Aprobacion de modificaciones al Cuadro Multianual de Necesidades', 'Anexo 4', 1),
+  /* El informe, nota tecnica o expediente con que el area usuaria sustenta una
+     solicitud extraordinaria. No lleva firmas propias: no es un documento del
+     flujo que alguien tenga que suscribir, es el respaldo que Abastecimiento
+     lee para validar la urgencia. Va por la misma via que los anexos -subir al
+     file server y registrar- para que herede versionado y trazabilidad en vez
+     de quedar como un adjunto suelto. */
+  ('CMN_SUSTENTO_URGENCIA',
+   'Sustento de la urgencia de una solicitud extraordinaria', 'Sustento', 0);
 
 UPDATE d
    SET d.Nombre = s.Nombre, d.NumeracionVisible = s.NumeracionVisible,

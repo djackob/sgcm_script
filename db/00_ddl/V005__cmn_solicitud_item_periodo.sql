@@ -62,8 +62,11 @@ CREATE TABLE cmn.Solicitud (
     CentroCosto      varchar(15) NOT NULL,
 
     TipoOperacion    varchar(20) NOT NULL CONSTRAINT DF_cmn_Solicitud_Operacion DEFAULT ('MODIFICACION'),
-    /* Ordinaria o urgente: lo determina Abastecimiento durante la evaluacion,
-       por eso admite nulo mientras el expediente esta en el area usuaria. */
+    /* Ordinaria o extraordinaria. NOTA: nacio como ORDINARIA / URGENTE y la
+       declaraba Abastecimiento durante la evaluacion; V012 renombra el valor y
+       la mueve al registro, donde la declara el area usuaria. El dominio
+       vigente y la justificacion de la urgencia estan en V012; aqui se conserva
+       la definicion original para no reescribir la historia de la migracion. */
     TipoInclusion    varchar(15)     NULL,
 
     Sustento         nvarchar(max) NOT NULL,

@@ -110,6 +110,7 @@ CREATE TABLE cmn.Paquete (
     EquipoEliminacionAuditoria    varchar(50) NULL,
     ProgramaEliminacionAuditoria  varchar(50) NULL,
 
+    /* V012 sustituye URGENTE por EXTRAORDINARIA en esta misma restriccion. */
     CONSTRAINT CK_cmn_Paquete_Inclusion CHECK (TipoInclusion IN ('ORDINARIA','URGENTE')),
     CONSTRAINT CK_cmn_Paquete_Ano       CHECK (AnoEje BETWEEN 2020 AND 2100),
     CONSTRAINT CK_cmn_Paquete_Datos     CHECK (ISJSON(DatosAdicionales) = 1),
