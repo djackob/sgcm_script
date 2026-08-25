@@ -355,7 +355,8 @@ BEGIN
                 @TipoMovimiento varchar(20),
                 @SecFunc     int,
                 @Origen      varchar(1),
-                @FuenteFinanc varchar(2);
+                @FuenteFinanc varchar(2),
+                @NumeroPedido varchar(6);
 
         SELECT @Maestro     = Maestro,
                @AnoEje      = AnoEje,
@@ -366,7 +367,8 @@ BEGIN
                @TipoMovimiento = UPPER(LTRIM(RTRIM(TipoMovimiento))),
                @SecFunc     = SecFunc,
                @Origen      = Origen,
-               @FuenteFinanc = FuenteFinanc
+               @FuenteFinanc = FuenteFinanc,
+               @NumeroPedido = NumeroPedido
         FROM OPENJSON(@parametro)
         WITH (
             Maestro     varchar(40),
@@ -378,7 +380,8 @@ BEGIN
             TipoMovimiento varchar(20),
             SecFunc     int,
             Origen      varchar(1),
-            FuenteFinanc varchar(2)
+            FuenteFinanc varchar(2),
+            NumeroPedido varchar(6)
         );
 
         IF NULLIF(LTRIM(RTRIM(@Maestro)), '') IS NULL
@@ -537,12 +540,121 @@ BEGIN
                            ORDER BY CentroCosto
                              FOR JSON PATH);
 
+        ELSE IF @Maestro IN ('PEDIDO', 'PEDIDO_DETALLE')
+        BEGIN
+            /* REQ-02: el combo lista los pedidos SIGA del AREA USUARIA del
+               actor, no de cualquier centro. CentroCostoSiga sale de la unidad
+               de la sesion (igual que paRegistrarRequerimiento). TipoPedido 1
+               es el pedido de area usuaria; el 2 es de almacen.
+
+               PEDIDO_DETALLE une en una sola respuesta lo que el sistema
+               anterior pedia en dos HTTP al elegir un N°: la tarea del centro
+               (listarCentroCostoTarea) y el resumen concatenado de items
+               (listarItemsPedidoResumen). Solo lineas de TipoPedido 1 del area
+               del actor: el API viejo mezclaba el pedido 1 y el 2 con el mismo
+               numero, y eso no corresponde al formulario del area usuaria. */
+            DECLARE @IdUsuarioPed      uniqueidentifier,
+                    @CuentaPed         varchar(120),
+                    @NombrePed         varchar(250),
+                    @CargoPed          varchar(180),
+                    @RolPed            varchar(40),
+                    @IdUnidadPed       uniqueidentifier,
+                    @CentroCostoActor  varchar(15),
+                    @EsTitularPed      bit,
+                    @IpPed             varchar(45),
+                    @EquipoPed         varchar(50),
+                    @ProgramaPed       varchar(50),
+                    @CorrPed           uniqueidentifier;
+
+            EXEC sigcm.paResolverActor
+                @parametro,
+                @IdUsuarioPed     OUTPUT,
+                @CuentaPed        OUTPUT,
+                @NombrePed        OUTPUT,
+                @CargoPed         OUTPUT,
+                @RolPed           OUTPUT,
+                @IdUnidadPed      OUTPUT,
+                @CentroCostoActor OUTPUT,
+                @EsTitularPed     OUTPUT,
+                @IpPed            OUTPUT,
+                @EquipoPed        OUTPUT,
+                @ProgramaPed      OUTPUT,
+                @CorrPed          OUTPUT;
+
+            IF NULLIF(LTRIM(RTRIM(@CentroCostoActor)), '') IS NULL
+                THROW 51023, 'VALIDACION_PAYLOAD: PEDIDO exige que la unidad del actor tenga centro de costo SIGA (area usuaria).', 1;
+
+            IF @CentroCosto IS NOT NULL
+               AND LTRIM(RTRIM(@CentroCosto)) <> LTRIM(RTRIM(@CentroCostoActor))
+                THROW 51026, 'NO_AUTORIZADO: los pedidos se listan solo del area usuaria del actor.', 1;
+
+            SET @CentroCosto = LTRIM(RTRIM(@CentroCostoActor));
+
+            IF @Maestro = 'PEDIDO'
+                SET @Datos = (SELECT TOP (@Limite) NumeroPedido, MotivoPedido, AnoEje,
+                                     TipoPedido, ActProy, FuenteFinanc, CodigoTarea,
+                                     SecFunc, FechaPedido, Origen, CentroCosto, Programa
+                                FROM siga.vwPedido
+                               WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
+                                 AND CentroCosto = @CentroCosto
+                                 AND TipoPedido = '1'
+                               ORDER BY NumeroPedido
+                                 FOR JSON PATH);
+            ELSE
+            BEGIN
+                SET @NumeroPedido = NULLIF(LTRIM(RTRIM(@NumeroPedido)), '');
+                IF @NumeroPedido IS NULL
+                    THROW 51027, 'VALIDACION_PAYLOAD: PEDIDO_DETALLE exige NumeroPedido.', 1;
+
+                SET @Datos = (
+                    SELECT TOP (1)
+                           p.NumeroPedido,
+                           p.AnoEje,
+                           p.CodigoTarea,
+                           p.ActProy,
+                           p.Origen,
+                           p.FuenteFinanc,
+                           p.Programa,
+                           p.SecFunc,
+                           t.TipoTarea,
+                           t.NivelTarea,
+                           t.NombreTarea,
+                           i.CodigoItem,
+                           i.NombreItem,
+                           i.Clasificador
+                      FROM siga.vwPedido AS p
+                      LEFT JOIN siga.vwTarea AS t
+                             ON t.AnoEje      = p.AnoEje
+                            AND t.SecEjec     = p.SecEjec
+                            AND t.CentroCosto = p.CentroCosto
+                            AND t.CodigoTarea = p.CodigoTarea
+                      OUTER APPLY (
+                            SELECT CodigoItem   = STRING_AGG(CONVERT(varchar(max), x.CodigoItem),   ', ')
+                                                      WITHIN GROUP (ORDER BY x.Secuencia),
+                                   NombreItem   = STRING_AGG(CONVERT(varchar(max), x.NombreItem),   ', ')
+                                                      WITHIN GROUP (ORDER BY x.Secuencia),
+                                   Clasificador = STRING_AGG(CONVERT(varchar(max), x.Clasificador), ', ')
+                                                      WITHIN GROUP (ORDER BY x.Secuencia)
+                              FROM siga.vwPedidoItem AS x
+                             WHERE x.AnoEje       = p.AnoEje
+                               AND x.SecEjec      = p.SecEjec
+                               AND x.TipoPedido   = p.TipoPedido
+                               AND x.NumeroPedido = p.NumeroPedido
+                      ) AS i
+                     WHERE p.AnoEje = @AnoEje AND p.SecEjec = @SecEjec
+                       AND p.CentroCosto = @CentroCosto
+                       AND p.TipoPedido = '1'
+                       AND p.NumeroPedido = @NumeroPedido
+                       FOR JSON PATH);
+            END
+        END
+
         ELSE
         BEGIN
             DECLARE @errMaestro nvarchar(300) = CONCAT(
                 'VALIDACION_PAYLOAD: maestro desconocido "', @Maestro,
                 '". Validos: CENTRO_COSTO, META, FUENTE_FINANC, TAREA, UNIDAD_MEDIDA, ',
-                'CATALOGO, CUADRO_VIGENTE, TECHO, ETAPA_CENTRO.');
+                'CATALOGO, CUADRO_VIGENTE, TECHO, ETAPA_CENTRO, PEDIDO, PEDIDO_DETALLE.');
             THROW 51025, @errMaestro, 1;
         END
 
