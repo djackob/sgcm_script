@@ -170,6 +170,68 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-08-26 — La base en desarrollo y la integración con SIGA verificada allí
+
+**Qué se hizo.** Instalar el SIGCM en el servidor de desarrollo del ANIN
+(`192.168.40.75`) y probar contra su `SIGA_1750` real —33 292 líneas en el
+cuadro modificado 2026, no la copia local— que el CMN escribe en los dos
+momentos. Se trabajó por escritorio remoto desde `172.16.3.66`: la VPN no llega
+a la subred de servidores (ver `docs/instalar-en-desarrollo.md`).
+
+**El bug que sólo aparece en una instalación limpia.** `S002` apuntaba la regla
+de plazo `CMN_REVISION_UA` al estado `CMN_EN_EVAL_UA`, que `S001` había retirado
+del flujo y ya no inserta —sólo lo remapea a `CMN_EN_ABAST_ESP` para reubicar
+expedientes viejos—. La FK `FK_sigcm_PlazoRegla_Estado` no tenía a qué apuntar y
+la serie moría en el script 29 de 31.
+
+No se veía en local porque allí la base arrastraba la fila vieja de
+`sigcm.Estado` de una instalación anterior, que satisfacía la FK por accidente.
+**Un bug latente que cualquier instalación desde cero —QA, producción, un clon
+nuevo— habría encontrado.** Se corrigió siguiendo la equivalencia que `S001` ya
+documenta; la regla sigue con `Activo = 0`, así que no cambia comportamiento.
+
+**No era un trámite, era una instalación pendiente.** La documentación anterior
+daba por bloqueada la escritura en SIGA «hasta que el equipo de SIGA autorice».
+Somos ese equipo: la cuenta de desarrollo ya tenía **`db_owner` sobre
+`SIGA_1750`**. Lo que faltaba era instalar los tres procedimientos —estaban en
+el repo, sin aplicar—. En la base sólo existía `usp_ext_registrar_item_cmn`, que
+es el viejo y escribe en la ruta de formulación, cerrada desde enero.
+
+| Pieza | Dónde |
+|---|---|
+| `CMN_REVISION_UA` apunta al estado vigente | `db/20_seed/S002` |
+| Los tres `usp_ext_*` instalados en `SIGA_1750` | `SIGA/integracion/` |
+| Ruta de verificación corregida en los scripts de prueba | `db/90_pruebas/S901`, `S902` |
+| Procedimientos, verificación y acceso de red | `docs/instalar-en-desarrollo.md` |
+
+**Decisiones que no hay que volver a discutir:**
+
+- **`DBSIGCM` de desarrollo se recreó desde cero**, con acuerdo explícito y con
+  el inventario a la vista: 22 expedientes, 20 documentos y su auditoría. Se
+  perdieron a propósito. Lo que ya estaba escrito en `SIGA_1750` sigue ahí,
+  porque sobre SIGA sólo escribe el flujo.
+- **La ruta de verificación es `Modificación de C.M.N.`, también después del
+  Anexo 3.** `S901` y `S902` imprimían *Demanda Adicional*, que además de colgar
+  de la rama equivocada exige `flag_da_aprob` —en `NULL` para todos los
+  centros— y pierde el ítem al firmar el Anexo 4. Siguiendo esas instrucciones
+  uno encontraba la pantalla vacía y concluía que la escritura había fallado:
+  exactamente el error que motivó `SIGA_APLICATIVO.md`.
+- **El worker sigue deshabilitado por defecto.** Que la escritura esté
+  verificada no la vuelve automática: `Habilitado=true` y `Modo=real` se
+  encienden a propósito.
+
+**Cómo se prueba.** `S901` (Anexo 3) y `S902` (Anexo 4) contra el servidor de
+desarrollo. Expediente `CMN-2026-000001`, OTI, `SEC_CUADRO=1`, `SEC_ITEM=17`,
+solicitud SIGA **518**. `MOTIVO_SOLICITUD` pasó de `1` a `0` y el ítem quedó
+pedible; `TIPO_USO` en `'C'` y el snapshot en `_DET_ORI` con `TIPO='1'`. Las dos
+operaciones `COMPLETADO` en modo real, un intento cada una.
+
+**Pendiente:** el frontend no se pudo levantar en la máquina remota —no tiene
+Node instalado—. El backend sí: compila y sirve contra `192.168.40.75` sin
+cambiarle la configuración.
+
+---
+
 ### 2026-08-24 (tarde) — Corregir y anular: el pendiente que llevaba cuatro días
 
 **Qué pidió el negocio.** Cuatro cosas, sobre lo entregado esa mañana:

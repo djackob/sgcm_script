@@ -44,10 +44,15 @@ GO
   @SoloAnexo3 = 1 detiene la prueba despues de validar el Anexo 3, o sea con la
   solicitud ABIERTA en SIGA (MOTIVO_SOLICITUD='1').
 
-  Sirve para ver el item en la pantalla "Demanda Adicional - Identificacion",
-  que muestra la demanda adicional EN CURSO. Una vez firmado el Anexo 4 la
-  solicitud se cierra, el item pasa a MOTIVO_SOLICITUD='0' y deja esa pantalla:
-  ya no es demanda adicional pendiente, es parte del cuadro vigente.
+  Sirve para ver el item con la solicitud todavia abierta, o sea el efecto del
+  Anexo 3 aislado del Anexo 4.
+
+  En los dos momentos se mira por la MISMA ruta: Modificacion de C.M.N. ->
+  Bienes, Servicios y Obras. La pantalla "Demanda Adicional - Identificacion"
+  no sirve, aunque en este estado parezca que si: cuelga de Programacion del
+  C.M.N., exige SIG_CUADRO_X_CENTRO.flag_da_aprob -que esta en NULL para todos
+  los centros- y, en cuanto se firma el Anexo 4, el item pasa a
+  MOTIVO_SOLICITUD='0' y desaparece de ahi. Ver SIGA_APLICATIVO.md, seccion 2.
 
   Para completar despues el Anexo 4, usar S902 con el codigo de expediente.
 */
@@ -60,7 +65,7 @@ DECLARE @Version int, @paso varchar(80);
 
 /* Datos del area usuaria elegida: OTI (01.07.05.03). Ver la cabecera de S900.
    El centro tiene que estar en SIG_CUADRO_X_CENTRO.estado='4' o el aplicativo
-   no abre la Demanda Adicional, aunque la escritura en base funcione igual. */
+   no muestra el cuadro, aunque la escritura en base funcione igual. */
 DECLARE @CentroCosto varchar(15) = '01.07.05.03';
 DECLARE @AnoEje int = 2026, @SecEjec int = 1750;
 DECLARE @SecFunc int = 15, @Clasificador varchar(20) = '2.3. 2  9. 1  1';
@@ -338,11 +343,14 @@ BEGIN
     PRINT '  El item quedo con MOTIVO_SOLICITUD=1, o sea con demanda';
     PRINT '  adicional en curso. Asi es como se ve en el aplicativo:';
     PRINT '';
-    PRINT '    Logistica -> Programacion -> Programacion del C.M.N.';
+    PRINT '    Logistica -> Programacion -> Modificacion de C.M.N.';
     PRINT '      -> Bienes, Servicios y Obras';
     PRINT '    Anio 2026, area usuaria ' + @CentroCosto;
-    PRINT '    Boton "Demanda Adicional - Identificacion"';
     PRINT '    Tipo: Servicio';
+    PRINT '';
+    PRINT '  NO uses "Demanda Adicional - Identificacion": cuelga de';
+    PRINT '  Programacion del C.M.N., exige flag_da_aprob -en NULL para';
+    PRINT '  todos los centros- y pierde el item al firmar el Anexo 4.';
     PRINT '';
     PRINT '  SEC_CUADRO = ' + CONVERT(varchar(20), @SecCuadro)
         + '   SEC_ITEM = ' + CONVERT(varchar(20), @SecItem);
@@ -475,12 +483,12 @@ PRINT ' COMO VERLO EN EL APLICATIVO SIGA';
 PRINT '===========================================================';
 PRINT '  Modulo Logistica';
 PRINT '    -> Programacion';
-PRINT '       -> Programacion del C.M.N.';
+PRINT '       -> Modificacion de C.M.N.';
 PRINT '          -> Bienes, Servicios y Obras';
 PRINT '';
 PRINT '  Anio          : 2026';
 PRINT '  Area usuaria  : ' + @CentroCosto + '  (OTI)';
-PRINT '  Boton         : Demanda Adicional - Identificacion';
+PRINT '  Tipo          : Servicio';
 PRINT '';
 PRINT '  El item registrado desde el SIGCM es:';
 PRINT '    SEC_CUADRO      = ' + CONVERT(varchar(20), @SecCuadro);

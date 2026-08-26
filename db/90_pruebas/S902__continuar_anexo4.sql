@@ -209,10 +209,14 @@ PRINT '';
 PRINT '===========================================================';
 PRINT ' COMO VERLO EN EL APLICATIVO SIGA';
 PRINT '===========================================================';
-PRINT '  Modulo Logistica -> Programacion -> Programacion del C.M.N.';
+PRINT '  Modulo Logistica -> Programacion -> Modificacion de C.M.N.';
 PRINT '     -> Bienes, Servicios y Obras';
 PRINT '  Anio 2026, area usuaria ' + @CentroCosto;
-PRINT '  Boton "Demanda Adicional - Identificacion"';
+PRINT '  Tipo: Servicio';
+PRINT '';
+PRINT '  Con el Anexo 4 ya firmado el item NO esta en "Demanda Adicional -';
+PRINT '  Identificacion": al pasar a MOTIVO_SOLICITUD=0 dejo de ser demanda';
+PRINT '  en curso. Buscarlo ahi y no encontrarlo es lo esperado.';
 PRINT '';
 PRINT '  SEC_CUADRO = ' + CONVERT(varchar(20), @SecCuadro)
     + '   SEC_ITEM = ' + CONVERT(varchar(20), @SecItem)

@@ -152,20 +152,29 @@ un expediente pasa por `CMN_VALIDAR_UA`, las operaciones quedan encoladas en
 
 Para que se escriban de verdad hacen falta tres cosas, en este orden:
 
-### 1. El procedimiento del lado de SIGA — lo instala el equipo de SIGA
+### 1. Los procedimientos del lado de SIGA
 
-`SIGA/integracion/usp_ext_registrar_item_cmn.sql` corre **dentro de
-`SIGA_1750`**, no en nuestra base. Recibe parámetros tipados y XML —nada de
-JSON, porque SIGA está en compatibilidad 100— y es el que hace el `INSERT` en
-`SIG_CUADRO_NECESIDAD` y `SIG_CUADRO_NECESIDAD_DET`.
+Corren **dentro de `SIGA_1750`**, no en nuestra base. Reciben parámetros
+tipados y XML —nada de JSON, porque SIGA está en compatibilidad 100—. Son tres,
+y viven en `SIGA/integracion/`:
 
-Está entregado **para homologación**: es una propuesta que el ANIN tiene que
-revisar y autorizar antes de instalarlo. Nosotros no lo instalamos en
-desarrollo ni en producción. **Es un trámite, no una tarea de programación**, y
-mientras no ocurra no hay escritura posible en esos entornos.
+| Procedimiento | Qué momento resuelve |
+|---|---|
+| `usp_ext_incluir_item_cmn` | inclusión por el Anexo 3 |
+| `usp_ext_excluir_item_cmn` | exclusión por el Anexo 3 |
+| `usp_ext_aprobar_solicitud_cmn` | aprobación por el Anexo 4 |
 
-Cuando lo instalen, `W001` crea solo el sinónimo hacia él la próxima vez que se
-ejecute el instalador. No hay que tocar nada más.
+**Instalados en desarrollo el 2026-08-26.** Se aplican con `sqlcmd -d SIGA_1750`
+y requieren `db_owner` sobre esa base, que la cuenta de desarrollo ya tiene.
+
+> **`usp_ext_registrar_item_cmn` es el procedimiento viejo y no se usa.** Escribe
+> en `SIG_CUADRO_NECESIDAD`, o sea en la ruta de **formulación**, que en la
+> ejecutora 1750 se cerró el 2026-01-07. W001 lo dejó de invocar: un ítem
+> registrado por ahí no aparece en la pantalla que el área usuaria usa hoy ni
+> puede consumirlo un requerimiento. Sigue enlazado sólo por compatibilidad.
+
+Después de instalarlos hay que **reaplicar `W001`** para que cree los sinónimos
+—los enlaza sólo si el procedimiento existe—. Reejecutar `instalar.ps1` basta.
 
 ### 2. W001, que ya viene en la serie
 
@@ -230,9 +239,8 @@ técnica debe tener acceso a DBSIGCM, `EXECUTE` sobre W001 y permiso efectivo
 sobre el procedimiento de SIGA. Las credenciales se configuran por variables de
 entorno o en un `appsettings.Local.json` excluido de Git; nunca en este manual.
 
-Para habilitar escritura deben configurarse `Habilitado=true` y `Modo=real`.
-En desarrollo sólo se hace después de que el equipo de SIGA instale y autorice
-`usp_ext_registrar_item_cmn` y `usp_ext_excluir_item_cmn`.
+Para habilitar escritura deben configurarse `Habilitado=true` y `Modo=real`, y
+tienen que estar instalados los procedimientos del paso 1.
 
 ### Cómo verificar que llegó
 
@@ -241,10 +249,16 @@ En desarrollo sólo se hace después de que el equipo de SIGA instale y autorice
 SELECT AnoEje, CentroCosto, SecCuadro, SecItem, EstadoSiga, RegistradoEnSiga
   FROM integracion.MapeoCmn;
 
--- Del lado de SIGA: la cabecera y el item, con el SecCuadro de arriba
-SELECT * FROM siga.SIG_CUADRO_NECESIDAD     WHERE SECUENCIA = <SecCuadro>;
-SELECT * FROM siga.SIG_CUADRO_NECESIDAD_DET WHERE SECUENCIA = <SecCuadro>;
+-- Del lado de SIGA: el item, por la ruta de MODIFICACION
+SELECT SEC_CUADRO, SEC_ITEM, ANNO_PROG, ESTADO, FLAG_MODIFICADO,
+       MOTIVO_SOLICITUD, CANT_TOTAL, MNTO_TOTAL
+  FROM siga.SIG_CUADRO_MODIFICADO_DET
+ WHERE ANNO_EJEC = 2026 AND SEC_EJEC = 1750 AND SEC_ITEM = <SecItem>;
+-- MOTIVO_SOLICITUD 1 = Anexo 3 firmado    0 = Anexo 4 firmado, item pedible
 ```
+
+No consultes `SIG_CUADRO_NECESIDAD`: es la ruta de formulación y ahí no hay
+nada nuestro.
 
 ### Errores de negocio que devuelve SIGA
 
@@ -292,7 +306,31 @@ git pull; git checkout bd_mrz
 .\instalar.ps1 -Servidor "192.168.40.75" -Usuario developer_anin
 ```
 
-La escritura hacia SIGA queda en simulación hasta que el ANIN instale
-`usp_ext_registrar_item_cmn` en `SIGA_1750`. Eso no bloquea nada más: todo el
-flujo del CMN funciona y las operaciones se acumulan en la cola, listas para
-drenarse el día que se habilite.
+La escritura hacia SIGA está **verificada de punta a punta en desarrollo** desde
+el 2026-08-26 (expediente `CMN-2026-000001`, OTI, solicitud SIGA 518). Aun así,
+el worker sigue **deshabilitado por defecto**: la cola se drena a propósito, no
+por accidente.
+
+---
+
+## Trabajar desde una máquina de la red del ANIN
+
+`192.168.40.0/24` está **cerrada entera para el perfil externo de la VPN**. Con
+GlobalProtect conectado y funcionando —túnel arriba, DNS interno resolviendo—,
+medido el 2026-08-26:
+
+| Destino | Puerto | Resultado |
+|---|---|---|
+| `192.168.40.75` (SQL desa) | 1433 | bloqueado |
+| `192.168.40.75` | 3389 / 445 | bloqueado |
+| `192.168.40.71` | 3389 | bloqueado |
+| `192.168.20.13` (DNS interno) | 53 | abierto |
+| `172.16.3.66` (escritorio remoto) | 3389 | abierto |
+
+El error típico es `Named Pipes Provider ... 64`, y engaña: el driver intenta
+TCP, no pasa, y cae a named pipes antes de rendirse. **No es problema de
+Navicat, del driver ODBC ni de la red.** No pierdas tiempo depurando ese lado.
+
+Mientras no salga la regla de firewall —pedida por User-ID, no por IP de túnel,
+porque GlobalProtect asigna la IP desde un pool y cambia entre reconexiones—, se
+trabaja por escritorio remoto desde `172.16.3.66`, que sí alcanza la subred.
