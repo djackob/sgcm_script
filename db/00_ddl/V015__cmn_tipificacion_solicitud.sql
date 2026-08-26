@@ -1,6 +1,6 @@
 /*
 ===============================================================================
-  SIGCM - Migracion V012 : Tipificacion de la solicitud de modificacion
+  SIGCM - Migracion V015 : Tipificacion de la solicitud de modificacion
   Motor  : SQL Server 2022 (compat 160)
   Ambito : [DBSIGCM]
   Requiere: V005 (cmn.Solicitud), V011 (cmn.Paquete)
@@ -109,5 +109,5 @@ IF NOT EXISTS (SELECT 1 FROM sys.check_constraints
                OR LEN(LTRIM(RTRIM(ISNULL(JustificacionUrgencia, N'')))) > 0);
 GO
 
-PRINT 'V012 aplicada: tipificacion ordinaria / extraordinaria con justificacion.';
+PRINT 'V015 aplicada: tipificacion ordinaria / extraordinaria con justificacion.';
 GO

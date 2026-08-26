@@ -267,7 +267,7 @@ tipificar, porque ya no hay ninguno. Lo que la integración escribió en su día
 | Pieza | Dónde |
 |---|---|
 | Sinónimo y vista `siga.vwMetaXCentro` sobre `SIG_METAS_X_CENTRO` | `00_servidor/C003`, `db/00_ddl/V004` |
-| `JustificacionUrgencia`; `URGENTE` → `EXTRAORDINARIA` en las dos tablas | `db/00_ddl/V012__cmn_tipificacion_solicitud.sql` |
+| `JustificacionUrgencia`; `URGENTE` → `EXTRAORDINARIA` en las dos tablas | `db/00_ddl/V015__cmn_tipificacion_solicitud.sql` |
 | `META` y `FUENTE_FINANC` delimitados por `CentroCosto`; maestro `META_X_CENTRO` | `db/10_api/F001` |
 | Rechazo de `MODIFICACION` (51125), tipificación obligatoria (51122-51124), meta/fuente del centro (51126) | `db/10_api/F002` |
 | `TipoInclusion` deja de escribirse en la transición | `db/10_api/F004` |

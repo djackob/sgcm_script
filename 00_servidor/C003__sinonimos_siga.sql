@@ -76,7 +76,11 @@ INSERT INTO @tablas (tabla) VALUES
     (N'SIG_CUADRO_MODIFICADO_CMN'),
     /* Gobierno de etapa y fase: hallazgos 5.3 y 5.4 del mapa-siga-cmn */
     (N'SIG_CUADRO_X_CENTRO'),
-    (N'SIG_PARAMETRO_EJECUTORA_ANIO');
+    (N'SIG_PARAMETRO_EJECUTORA_ANIO'),
+    /* Pedidos del area usuaria: combo del requerimiento (REQ-02 / siga.vwPedido)
+       y lineas del pedido (REQ-02 / siga.vwPedidoItem). */
+    (N'SIG_PEDIDOS'),
+    (N'SIG_DETALLE_PEDIDOS');
 
 DECLARE @tabla sysname, @sql nvarchar(max), @creados int = 0;
 

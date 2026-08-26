@@ -78,7 +78,7 @@ INSERT INTO @inventario (tipo, cantidad, esperado) VALUES
        la instalacion por un motivo que no es un problema. Cuales existen y a
        donde apuntan se sigue listando abajo, que es lo que de verdad importa. */
     (N'Sinonimos tablas SIGA', (SELECT COUNT(*) FROM sys.synonyms
-                                   WHERE name NOT LIKE N'usp[_]%'), 15),
+                                   WHERE name NOT LIKE N'usp[_]%'), 17),
     (N'Sinonimos proc. SIGA', (SELECT COUNT(*) FROM sys.synonyms
                                            WHERE name LIKE N'usp[_]%'), NULL),
     (N'Secuencias',     (SELECT COUNT(*) FROM sys.sequences), NULL),

@@ -30,7 +30,10 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13 | `db/00_ddl/V009__requerimiento_registro.sql` | DBSIGCM | Módulo Requerimiento, núcleo |
 | 13b | `db/00_ddl/V010__correlativo.sql` | DBSIGCM | Correlativos del código de expediente |
 | 13c | `db/00_ddl/V011__cmn_paquete_anexo4.sql` | DBSIGCM | Anexo 4 múltiple y firma en cadena |
-| 13d | `db/00_ddl/V012__cmn_tipificacion_solicitud.sql` | DBSIGCM | Solicitud ordinaria / extraordinaria con justificación |
+| 13d | `db/00_ddl/V012__siga_vw_pedido.sql` | DBSIGCM | Vista `siga.vwPedido` (combo REQ-02) |
+| 13e | `db/00_ddl/V013__siga_vw_pedido_item.sql` | DBSIGCM | Vista `siga.vwPedidoItem` (lineas del pedido SIGA) |
+| 13f | `db/00_ddl/V014__siga_vw_pedido_fuente_programa.sql` | DBSIGCM | `vwPedido`: FF/RR desde `fuente_fto` y programa de la meta |
+| 13g | `db/00_ddl/V015__cmn_tipificacion_solicitud.sql` | DBSIGCM | Solicitud ordinaria / extraordinaria con justificación |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
