@@ -34,6 +34,12 @@
 
       .\instalar.ps1 -Servidor "192.168.40.75" -Usuario developer_anin
 
+  Si el sqlcmd de la maquina es version 18 o superior, hace falta -Confiar para
+  aceptar el certificado autofirmado del servidor. Para no tener que averiguarlo
+  a mano, usa desa.ps1, que lo detecta solo:
+
+      .\desa.ps1
+
   NOTA SOBRE C002
   ---------------
   C002__acceso_lectura_siga.sql NO forma parte de esta serie. Concede permisos
@@ -50,7 +56,8 @@ param(
     [string]$Usuario        = "",
     [switch]$Recrear,
     [switch]$ConDatosPrueba,
-    [switch]$SoloVerificar
+    [switch]$SoloVerificar,
+    [switch]$Confiar
 )
 
 $ErrorActionPreference = "Stop"
@@ -144,6 +151,11 @@ function Ejecutar([string]$ruta, [string]$baseDestino, [string[]]$variables) {
     #    la bitacora se vuelve ilegible.
     $argumentos = @("-S", $Servidor, "-d", $baseDestino, "-b", "-I", "-W", "-s", "|", "-i", $ruta)
     if ($Usuario -ne "") { $argumentos += @("-U", $Usuario) } else { $argumentos += "-E" }
+    # -C acepta el certificado del servidor sin validar la cadena. Hace falta con
+    # sqlcmd 18 o superior, que cifra por defecto: contra un servidor con
+    # certificado autofirmado -como el de desarrollo- si no se pasa, la conexion
+    # ni siquiera se abre. En sqlcmd 11 la opcion no existe.
+    if ($Confiar) { $argumentos += "-C" }
     foreach ($v in $variables) { $argumentos += @("-v", $v) }
 
     $salida = & sqlcmd $argumentos 2>&1 | Out-String
