@@ -48,9 +48,14 @@ INSERT INTO @Regla VALUES
    'CMN_EN_EVAL_OA', 2, 'HABIL', 0,
    'PENDIENTE_CONFIRMACION - analogia con revision de requerimiento'),
 
+  /* El estado CMN_EN_EVAL_UA fue retirado del flujo: S001 lo remapea a
+     CMN_EN_ABAST_ESP, que es el escalon donde el especialista de
+     Abastecimiento revisa el Anexo 3. Se sigue aqui la misma equivalencia.
+     Apuntar al codigo viejo rompia FK_sigcm_PlazoRegla_Estado en toda
+     instalacion hecha desde cero. */
   ('CMN_REVISION_UA',
    'Revision del Anexo 3 por la Unidad de Abastecimiento',
-   'CMN_EN_EVAL_UA', 2, 'HABIL', 0,
+   'CMN_EN_ABAST_ESP', 2, 'HABIL', 0,
    'PENDIENTE_CONFIRMACION - analogia con revision de requerimiento'),
 
   ('CMN_SUBSANACION',
