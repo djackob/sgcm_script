@@ -34,6 +34,7 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13e | `db/00_ddl/V013__siga_vw_pedido_item.sql` | DBSIGCM | Vista `siga.vwPedidoItem` (lineas del pedido SIGA) |
 | 13f | `db/00_ddl/V014__siga_vw_pedido_fuente_programa.sql` | DBSIGCM | `vwPedido`: FF/RR desde `fuente_fto` y programa de la meta |
 | 13g | `db/00_ddl/V015__cmn_tipificacion_solicitud.sql` | DBSIGCM | Solicitud ordinaria / extraordinaria con justificación |
+| 13h | `db/00_ddl/V016__sso_perfil_derivacion.sql` | DBSIGCM | Padrón del SSO y árbol de derivación jefe→coordinador→especialista |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
@@ -41,11 +42,16 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 18 | `db/10_api/F005__requerimiento.sql` | DBSIGCM | Requerimiento: registrar, obtener, listar |
 | 19 | `db/10_api/F006__acceso_sesion.sql` | DBSIGCM | Acceso y armado de la sesión |
 | 19b | `db/10_api/F007__cmn_anexo4.sql` | DBSIGCM | Anexo 4: generar, obtener, anular |
+| 19c | `db/10_api/F008__sso_padron_derivacion.sql` | DBSIGCM | Sincronización del padrón SSO y destinatarios de derivación |
+| 19d | `db/10_api/F009__panel_sso.sql` | DBSIGCM | Panel de accesos y perfiles (solo lectura, `ADMIN_SISTEMA`) |
 | 20 | `db/15_siga/W001__escritor_cuadro_modificado.sql` | DBSIGCM | Escritor SIGA |
 | 21 | `db/20_seed/S000__numeros.sql` | DBSIGCM | Tabla de números |
 | 22 | `db/20_seed/S001__roles_estados_transiciones.sql` | DBSIGCM | Configuración de CMN |
 | 23 | `db/20_seed/S002__plazos_directiva.sql` | DBSIGCM | Plazos de la Directiva |
 | 24 | `db/20_seed/S003__requerimiento_estados.sql` | DBSIGCM | Configuración de Requerimiento |
+| 25 | `db/20_seed/S005__sso_perfil_derivacion.sql` | DBSIGCM | Mapeo `cod_perfil`→rol y aristas del árbol de derivación |
+| 26 | `db/20_seed/S006__cmn_derivacion_directa.sql` | DBSIGCM | Las dos transiciones del salto directo jefe→especialista en CMN |
+| 27 | `db/20_seed/S007__panel_sso_administrador.sql` | DBSIGCM | Módulo `ADMIN_SSO`, su permiso, el mapeo `P0001` y el administrador |
 
 Pendiente de escribir: `S004` — indagación de mercado, cuadro de cotizaciones
 (Anexo 8), CCP y orden.
@@ -65,6 +71,7 @@ aplica ordenados por nombre, así que agregar uno nuevo no obliga a tocar
 | `S904__casos_anexo4_multiple.sql` | Deja 4 Anexos 3 en borrador, uno por área usuaria real, para recorrer el flujo a mano desde la pantalla | no | sí, esa es la idea |
 | `S905__limpiar_expedientes_cmn.sql` | **Borra** todos los expedientes CMN de DBSIGCM y reinicia el correlativo. Exige `-v confirmar="SI"` | no | sí: deja la base sin expedientes |
 | `S906__prueba_edicion_cmn.sql` | Corregir y anular un Anexo 3: quién puede, desde qué estado, y que no duplique el expediente | no | no, se limpia sola |
+| `S907__prueba_sso_derivacion.sql` | Padrón del SSO y árbol de derivación, 15 comprobaciones: alta, **baja**, re-alta, los dos flujos (CMN sin coordinador de área usuaria, Requerimiento con él) y la derivación a persona validada por `F004`. Padrón sintético, no necesita red al SSO | no | no, corre dentro de una transacción y termina en `ROLLBACK` |
 
 `S903` es la que conviene correr después de tocar el flujo: no toca SIGA, se
 limpia al terminar y es repetible. Comprueba la firma en cadena, la regla del

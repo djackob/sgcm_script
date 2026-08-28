@@ -170,6 +170,183 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-08-27 — El SSO trae el padrón, y el árbol de derivación es dato
+
+**Qué pidió el negocio.** Integrar el SSO institucional de verdad: traer su data
+con el centro de costo y relacionarla con nuestro sistema. Y registrar el árbol
+de perfiles **jefe → coordinador → especialista**, con dos reglas: en CMN el área
+usuaria **no** pasa por el coordinador, en Requerimiento sí; y el jefe puede
+derivar a un coordinador o directamente a un especialista.
+
+**Lo que había que entender primero.** El `centro_costo` **no identifica a una
+persona: identifica al área.** Es el código presupuestal de la unidad orgánica
+(`01.07.03.01` = Unidad de Abastecimiento), y el jefe, el coordinador y el
+especialista de esa unidad lo comparten. De ahí sale la unidad de razonamiento
+del árbol:
+
+> **puesto = (`cod_perfil`, `centro_costo`)**
+
+Un puesto puede tener varios ocupantes —`ESPECIALISTA UA @ 01.07.03.01` son
+dos—. Por eso **la derivación se configura por perfil y se resuelve a persona en
+el momento de derivar**. En la configuración no hay un solo nombre propio.
+
+**Qué se construyó:**
+
+| Pieza | Dónde |
+|---|---|
+| `sigcm.PerfilSso`, `sigcm.RolDerivacion`, `sigcm.UnidadTramitadora`, `sigcm.SincronizacionSso`, `IdUsuarioSso` / `IdDependenciaSso` | `db/00_ddl/V016` |
+| Reconciliación del padrón, `fnDestinatarioDerivacion`, listado de perfiles y de destinatarios | `db/10_api/F008` |
+| `paEjecutarTransicion` acepta `IdResponsableDestino` y lo valida contra el árbol | `db/10_api/F004` |
+| `paObtenerSesion` marca el `Origen` de la sesión | `db/10_api/F006` |
+| Mapeo de los 14 `cod_perfil` y las 10 aristas del árbol | `db/20_seed/S005` |
+| Las dos transiciones del salto directo jefe→especialista | `db/20_seed/S006` |
+| Panel de accesos y perfiles, solo lectura | `db/10_api/F009`, `db/20_seed/S007` |
+| Pantalla del panel | `../../anin_scm_front/…/modules/mantenimiento-sso/` |
+| Prueba de alta, baja, re-alta, los dos flujos y la derivación (15 comprobaciones) | `db/90_pruebas/S907` |
+| Modal de derivación en la bandeja de CMN | `../../anin_scm_front/…/gestion-cmn/` |
+| Cadena `cnx_saa_` y lector del padrón | `../../anin_scm_back/…/appsettings.json`, `DaProcesoSso.cs` |
+| Ingreso por SSO de punta a punta | `../../anin_scm_back/…/SsoAccesoService.cs`, `TokenController.cs` |
+| Selector de perfil cuando la persona ejerce varias ternas | `../../anin_scm_front/…/modules/sso/` |
+
+**Decisiones que no hay que volver a discutir:**
+
+- **La sincronización es por diferencia de conjuntos, no un upsert.** El SSO da
+  de baja poniendo `td_login_acceso.activo` en `false`, y su vista filtra por esa
+  columna: **la persona dada de baja no llega marcada como inactiva, desaparece
+  del resultado.** Un upsert de lo que llega jamás se enteraría, porque quien se
+  fue ya no vuelve a entrar. Se trata el padrón como la verdad completa y lo que
+  falta se cierra con `VigenteHasta`. Hay 43 accesos inactivos contra 20 activos:
+  la baja es la operación frecuente, no la rara.
+- **Se sincroniza en cada ingreso.** Son veinte filas; cuesta menos que validar
+  el token. Lo caro es una lista de derivación que ofrece a quien renunció.
+- **Tres salvaguardas, y las tres son necesarias.** Un padrón vacío **aborta**
+  (51603) en vez de dar de baja a la entidad entera; solo se cierran asignaciones
+  de usuarios con `IdUsuarioSso`, así que los ficticios de S900 y las cuentas
+  técnicas quedan fuera; y `Completo = 0` permite sincronizar sin cerrar nada.
+- **El módulo es columna de `sigcm.RolDerivacion`.** Que en CMN el área usuaria
+  no pase por el coordinador no es un `if`: es que **esa fila no existe** para
+  ese módulo. El salto directo del jefe al especialista tampoco es una excepción,
+  es otra arista con `Orden` 2.
+- **`IdResponsableActual` es una indicación, nunca el único filtro de la
+  bandeja.** La bandeja sigue resolviendo por unidad y rol (`F002`), así que el
+  expediente de quien se va lo ve su reemplazo sin que nadie lo reasigne.
+  Filtrarla solo por responsable recrearía el expediente huérfano.
+- **La misma función valida y alimenta la pantalla.** `fnDestinatarioDerivacion`
+  la usan el listado y `paEjecutarTransicion`. Si la pantalla lo ofrece, la
+  transición lo acepta: no pueden discrepar.
+- **`sigcm.Unidad` se sincroniza del SSO, emparejando por centro de costo.**
+  `tm_login_dependencia` trae sigla, nombre, centro de costo e `id_padre`, así
+  que el árbol de áreas viene armado. El emparejamiento va por centro de costo
+  **antes** que por el id del SSO: si no, una base con `UO-UDS` de S900 acabaría
+  con dos unidades para el mismo centro de costo y la bandeja partida en dos.
+- **`EsAreaUsuaria` vive en `sigcm.UnidadTramitadora`, no en un `UPDATE` de la
+  semilla.** Cuando S005 corre, las unidades todavía no existen: las crea la
+  primera sincronización. El `UPDATE` no encontraba nada y Abastecimiento quedaba
+  marcado como área usuaria —pasó, y así se descubrió—.
+- **`PE019 EXTERNO` no se mapea a propósito.** Darle un rol del flujo por
+  descarte sería inventarle una autorización. Queda reportado en `Descartes` de
+  cada sincronización, que es la visibilidad que corresponde.
+- **La identidad se ancla en `id_usuario` del SSO**, no en el DNI ni en el
+  nombre: si le corrigen el documento, sigue siendo la misma persona.
+- **Un re-alta abre una fila nueva y conserva la cerrada.** El historial es lo
+  que permite responder quién ejercía qué rol el día que se firmó un Anexo 3.
+- **La baja cierra con `VigenteHasta` Y con `Activo = 0`.** El predicado de
+  vigencia de todo el sistema es `VigenteHasta IS NULL OR VigenteHasta >= hoy`,
+  o sea que *«vigente hasta hoy» todavía vale hoy*: una baja y un re-alta el
+  mismo día dejaban a la persona **duplicada** en la lista de derivación. Se vio
+  contra el padrón real. Adelantar la fecha un día violaría
+  `CK_sigcm_UsuarioRol_Vigencia`, y cambiar el predicado obligaría a tocar F001,
+  F004 y F006 por un caso de borde; `Activo` es el borrado lógico que la tabla ya
+  declara y que todos los consumidores ya filtran.
+- **La lista de destinatarios llega acotada al rol del estado destino.** El
+  filtro vive en `paListarDestinatarioDerivacion`, no en el cliente: cruzarlo en
+  TypeScript sería reimplementar un pedazo de la máquina de estados. Una acción
+  que no es derivación devuelve lista vacía y la pantalla no pregunta nada.
+- **El salto directo necesitaba dos transiciones que no existían** (`S006`). El
+  árbol de `S005` ya declaraba la arista, pero desde `CMN_EN_ABAST_JEFE` la única
+  salida era hacia el coordinador. No hubo inconsistencia visible —el filtro por
+  rol destino no ofrecía lo que no se podía cumplir—, sólo una capacidad que
+  faltaba. Los estados destino ya existían: fueron dos filas.
+- **El camino largo no se retira.** Las dos rutas conviven y el jefe elige, que
+  es la lectura literal de lo que pidió el negocio. Quitar el escalón del
+  coordinador es una decisión distinta, que afecta expedientes en curso.
+- **Elegir persona es opcional aunque haya lista.** Sin elección el expediente
+  queda a nombre del puesto, como siempre. Con un solo puesto y un solo ocupante
+  la pantalla lo preselecciona, pero lo muestra: el jefe tiene que ver a quién se
+  lo está pasando.
+- **Un fallo al listar destinatarios no bloquea la acción.** Sin lista, la
+  derivación se comporta como antes. Impedir una acción del flujo porque no se
+  pudo pintar un desplegable opcional cambiaría una comodidad por una
+  interrupción.
+- **El panel de accesos es de solo lectura, a propósito.** El mapeo de perfiles y
+  el árbol se editan en la semilla, que es la que viaja a producción versionada y
+  la que un revisor lee en un PR. Volverlos editables por pantalla exige antes
+  decidir quién manda cuando la semilla y la pantalla discrepan: hoy `S005` hace
+  `UPDATE` sobre las tres tablas en cada corrida, así que una edición por
+  pantalla la pisaría el siguiente `instalar.ps1`.
+- **Los descartes se muestran fuera de las pestañas.** Son la respuesta a la
+  pregunta que trae a alguien al panel —por qué una persona no puede entrar—;
+  esconderlos obligaría a buscarlos a quien ya viene buscando.
+- **El panel es un módulo de `sigcm.Modulo`, no una opción suelta del menú.** El
+  menú se arma exclusivamente de `RolModulo` × `Modulo` (F006); una opción fuera
+  de ahí necesitaría una segunda lista paralela que se desincroniza.
+- **El rol se valida dos veces**: `RolModulo` decide qué se *muestra*,
+  `paObtenerPanelSso` decide qué se *puede* (51701). Un menú sin la opción no
+  impide llamar al endpoint.
+
+**Cómo se prueba.** `db/90_pruebas/S907`: 12 comprobaciones en verde contra
+desarrollo, con padrón sintético, dentro de una transacción que termina en
+`ROLLBACK`. No necesita red al SSO y no deja rastro.
+
+Verificado además contra el SSO **real** (`192.168.20.111:5434/saa_`): 21 puestos
+recibidos, 25 unidades y 20 usuarios dados de alta, `PE019` descartado; segunda
+corrida 0/0/0/0; sacar a una especialista del padrón produjo `AsignacionesBaja:1`
+y desapareció de la lista de derivación del jefe; devolverla abrió una asignación
+nueva conservando la cerrada.
+
+**Sobre el catálogo de perfiles del SSO.** La familia `PE079`–`PE092` la creó
+**el propio equipo** —César Ortiz (46183970), de la OTI— en junio de 2026, y
+creció por incorporación: `PE091` entró el 25 y `PE092` el 29. Agregar un perfil
+no es un trámite con terceros. La asimetría que queda es que sólo Abastecimiento
+tiene los tres escalones (`PE082`/`PE083`/`PE084`); el área usuaria está en pares
+(`PE079`/`PE080`, `PE091`/`PE092`), sin coordinador.
+
+**El administrador del sistema: un huevo y gallina.** Al 2026-08-27 no había
+**ninguna** fila con `ADMIN_SISTEMA` en `sigcm.UsuarioRol`. Sin administrador no
+hay quien abra el panel; sin panel no hay dónde ver por qué nadie entra. El SSO
+trae media solución: el perfil `P0001 ADMINISTRADOR` **ya existe y ya está ligado
+al sistema 73**, pero sus dos accesos (`32885691` y `43552822`) están en
+`activo = false`. `S007` deja las dos puertas listas:
+
+- **La principal**: el mapeo `P0001 → ADMIN_SISTEMA`. En cuanto el SSO active ese
+  acceso para alguien, entra como administrador sin tocar nada más aquí. No crea
+  una segunda autoridad.
+- **La de respaldo**: la cuenta local `admin.sigcm`, con `IdUsuarioSso` en nulo
+  —así la reconciliación no la toca—. **Es inerte mientras `acceso_local` sea
+  `"false"`**: el SIGCM no guarda contraseñas, así que sólo se puede usar por
+  `api/acceso`, que responde 404. Existe porque el panel es justamente la
+  herramienta para diagnosticar por qué nadie puede entrar, y dejarla accesible
+  sólo por SSO significa que si el SSO falla, la herramienta para averiguar por
+  qué falla tampoco está.
+
+**Pendientes:**
+
+- **Registrar `COORDINADOR DE UNIDAD` en el SSO** (opción recomendada de cuatro
+  evaluadas: crearlo, reutilizar el genérico `P0003`, designarlo desde el SIGCM,
+  o no hacer nada). Es una fila en `tm_login_perfil`, una en
+  `td_login_perfil_sistema` para el sistema 73, los accesos de cada persona, y
+  una fila en `S005`. **No bloquea nada hoy**: CMN no usa ese escalón y
+  Requerimiento aún no está en construcción. Designarlo desde el SIGCM se
+  descartó porque partiría la autoridad en dos padrones, que es lo que esta
+  iteración vino a cerrar.
+- La cadena `cnx_saa_` apunta al SSO de **desarrollo** con `postgres/postgres`.
+  Producción necesita su propia cadena y **una cuenta de solo lectura** sobre el
+  esquema `login`: la integración únicamente lee.
+- `PE019 EXTERNO` sigue sin mapear a propósito. Si ese consultor debe operar, la
+  pregunta es con qué autoridad; cuando se decida es una fila en `S005`.
+
+---
+
 ### 2026-08-26 — La base en desarrollo y la integración con SIGA verificada allí
 
 **Qué se hizo.** Instalar el SIGCM en el servidor de desarrollo del ANIN
