@@ -320,7 +320,15 @@ al sistema 73**, pero sus dos accesos (`32885691` y `43552822`) están en
 
 - **La principal**: el mapeo `P0001 → ADMIN_SISTEMA`. En cuanto el SSO active ese
   acceso para alguien, entra como administrador sin tocar nada más aquí. No crea
-  una segunda autoridad.
+  una segunda autoridad. **Resuelto el 2026-08-28**: se le dio ese acceso a
+  Gustavo Cruz (`44687266`, `id_usuario` 6) sobre la dependencia OTI — una fila
+  en `login.td_login_acceso` y otra en `login.td_login_acceso_dependencia`, sin
+  crear usuarios ni tocar contraseñas. La sincronización lo recogió sola
+  (`AsignacionesAlta: 1`) y hoy entra por SSO con dos perfiles: área usuaria jefe
+  y administrador. Ojo con el detalle que costó encontrar: Cruz **ya tenía** un
+  `P0001` activo, pero del `id_perfil_sistema` 184, que es del sistema 66; el del
+  SGCM es el **194**. Para deshacerlo, `activo = false` en ese acceso y la
+  siguiente reconciliación cierra la terna.
 - **La de respaldo**: la cuenta local `admin.sigcm`, con `IdUsuarioSso` en nulo
   —así la reconciliación no la toca—. **Es inerte mientras `acceso_local` sea
   `"false"`**: el SIGCM no guarda contraseñas, así que sólo se puede usar por
