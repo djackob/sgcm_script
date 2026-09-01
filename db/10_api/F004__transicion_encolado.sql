@@ -705,6 +705,216 @@ BEGIN
 
                 SET @Encoladas = @@ROWCOUNT;
             END
+            ELSE IF @OperacionIntegracion = 'CREAR_CUADRO_ADQUISICION'
+            BEGIN
+                IF @CodigoModulo <> 'REQUERIMIENTO'
+                    THROW 51225,
+                        'CONFLICTO_CONFIGURACION: CREAR_CUADRO_ADQUISICION solo aplica al modulo REQUERIMIENTO.',
+                        1;
+
+                DECLARE @reqSinPedido varchar(40);
+                SELECT TOP 1 @reqSinPedido = r.Codigo
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                 WHERE NOT EXISTS (
+                       SELECT 1
+                         FROM requerimiento.RequerimientoPedido AS p
+                        WHERE p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1);
+
+                IF @reqSinPedido IS NOT NULL
+                BEGIN
+                    DECLARE @errPed nvarchar(400) = CONCAT(
+                        'INTEGRACION_SIGA: el requerimiento ', @reqSinPedido,
+                        ' no tiene pedido SIGA. Vincule el pedido de requerimiento antes de generar el cuadro.');
+                    THROW 51229, @errPed, 1;
+                END
+
+                INSERT INTO integracion.Operacion
+                    (IdempotenciaKey, IdExpediente, IdSolicitud, IdSolicitudItem,
+                     IdRequerimiento, Operacion, Procedimiento, Secuencia, Estado, RequestJson,
+                     UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                     EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+                SELECT
+                    CONCAT(CONVERT(varchar(36), r.IdRequerimiento), ':',
+                           CONVERT(varchar(10), e.Version), ':CREAR_CUADRO_ADQUISICION'),
+                    e.IdExpediente, NULL, NULL,
+                    r.IdRequerimiento,
+                    'CREAR_CUADRO_ADQUISICION', 'integracion.paEscribirCuadroAdquisicion', 1, 'PENDIENTE',
+                    (SELECT
+                        IdRequerimiento = r.IdRequerimiento,
+                        CodigoRequerimiento = r.Codigo,
+                        AnoEje = p.AnoEje,
+                        SecEjec = p.SecEjec,
+                        NumeroPedido = RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6),
+                        Tdr = JSON_QUERY(ISNULL(tdr.Tdr, N'{}'))
+                       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                    @Cuenta, @Ahora, @Equipo, @Programa
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                  JOIN requerimiento.RequerimientoPedido AS p
+                    ON p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1
+                  OUTER APPLY (
+                      SELECT TOP 1 JSON_QUERY(dv.Payload, '$.Tdr') AS Tdr
+                        FROM sigcm.DocumentoExpediente AS de
+                        JOIN sigcm.Documento AS doc
+                          ON doc.IdDocumento = de.IdDocumento AND doc.Activo = 1
+                        JOIN sigcm.DocumentoVersion AS dv
+                          ON dv.IdDocumento = doc.IdDocumento AND dv.Activo = 1
+                       WHERE de.IdExpediente = e.IdExpediente
+                         AND doc.CodigoTipoDocumento = 'REQ_TDR_LOCACION'
+                       ORDER BY dv.Version DESC
+                  ) AS tdr;
+
+                SET @Encoladas = @@ROWCOUNT;
+
+                IF @Encoladas = 0
+                    THROW 51230,
+                        'INTEGRACION_SIGA: no se pudo encolar la generacion del cuadro de adquisicion.',
+                        1;
+            END
+            ELSE IF @OperacionIntegracion = 'CREAR_ORDEN_SERVICIO'
+            BEGIN
+                IF @CodigoModulo <> 'REQUERIMIENTO'
+                    THROW 51225,
+                        'CONFLICTO_CONFIGURACION: CREAR_ORDEN_SERVICIO solo aplica al modulo REQUERIMIENTO.',
+                        1;
+
+                DECLARE @reqSinCuadro varchar(40);
+                DECLARE @pedidoDiag varchar(80);
+                SELECT TOP 1
+                       @reqSinCuadro = r.Codigo,
+                       @pedidoDiag = CONCAT(
+                           'AnoEje=', p.AnoEje,
+                           ', SecEjec=', p.SecEjec,
+                           ', Pedido=', RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6))
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                  JOIN requerimiento.RequerimientoPedido AS p ON p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1
+                 WHERE NOT EXISTS (
+                       SELECT 1
+                         FROM siga.vwCuadroAdquisicionPedido AS c
+                        WHERE c.AnoEje = p.AnoEje
+                          AND c.SecEjec = p.SecEjec
+                          AND c.NumeroPedido = RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6));
+
+                IF @reqSinCuadro IS NOT NULL
+                BEGIN
+                    DECLARE @errCuadro nvarchar(700) = CONCAT(
+                        'INTEGRACION_SIGA: no hay un cuadro de adquisicion de servicios elegible en SIGA para el pedido del requerimiento ',
+                        @reqSinCuadro, ' (', @pedidoDiag, '). ',
+                        'Ejecute antes la accion Generar cuadro de adquisicion. ',
+                        'El cuadro debe quedar sin orden (NRO_ORDEN nulo).');
+                    THROW 51226, @errCuadro, 1;
+                END
+
+                DECLARE @reqSinProv varchar(40);
+                SELECT TOP 1 @reqSinProv = r.Codigo
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                 WHERE NULLIF(LTRIM(RTRIM(COALESCE(
+                       JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
+                       JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')))), '') IS NULL;
+
+                IF @reqSinProv IS NOT NULL
+                BEGIN
+                    DECLARE @errProv nvarchar(500) = CONCAT(
+                        'VALIDACION_PROVEEDOR: el requerimiento ', @reqSinProv,
+                        ' no tiene RUC del locador en el Anexo 5 / Anexo 6.');
+                    THROW 51227, @errProv, 1;
+                END
+
+                INSERT INTO integracion.Operacion
+                    (IdempotenciaKey, IdExpediente, IdSolicitud, IdSolicitudItem,
+                     IdRequerimiento, Operacion, Procedimiento, Secuencia, Estado, RequestJson,
+                     UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                     EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+                SELECT
+                    CONCAT(CONVERT(varchar(36), r.IdRequerimiento), ':',
+                           CONVERT(varchar(10), e.Version), ':CREAR_ORDEN_SERVICIO'),
+                    e.IdExpediente, NULL, NULL,
+                    r.IdRequerimiento,
+                    'CREAR_ORDEN_SERVICIO', 'integracion.paEscribirOrdenServicio', 1, 'PENDIENTE',
+                    (SELECT
+                        IdRequerimiento = r.IdRequerimiento,
+                        CodigoRequerimiento = r.Codigo,
+                        AnoEje = p.AnoEje,
+                        SecEjec = p.SecEjec,
+                        SecCuadro = c.SecCuadro,
+                        Proveedor = prov.Proveedor,
+                        FechaOrden = CONVERT(varchar(30), @Ahora, 126),
+                        Concepto = LEFT(r.Denominacion, 350),
+                        PlazoEntrega = r.PlazoDias,
+                        DocumentoReferencia = r.Codigo
+                       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                    @Cuenta, @Ahora, @Equipo, @Programa
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                  JOIN requerimiento.RequerimientoPedido AS p ON p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1
+                  CROSS APPLY (
+                      SELECT TOP 1 c2.SecCuadro
+                        FROM siga.vwCuadroAdquisicionPedido AS c2
+                       WHERE c2.AnoEje = p.AnoEje
+                         AND c2.SecEjec = p.SecEjec
+                         AND c2.NumeroPedido = RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6)
+                       ORDER BY c2.SecCuadro
+                  ) AS c
+                  CROSS APPLY (
+                      SELECT TOP 1 pr.PROVEEDOR AS Proveedor
+                        FROM siga.SIG_CONTRATISTAS AS pr
+                       WHERE REPLACE(pr.NRO_RUC, ' ', '') = REPLACE(
+                               COALESCE(
+                                   JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
+                                   JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')),
+                               ' ', '')
+                         AND COALESCE(pr.ESTADO, 'A') <> 'I'
+                       ORDER BY pr.PROVEEDOR
+                  ) AS prov
+                 WHERE EXISTS (
+                       SELECT 1 FROM requerimiento.CertificacionCcp AS ccp
+                        WHERE ccp.IdRequerimiento = r.IdRequerimiento
+                          AND ccp.Activo = 1
+                          AND NULLIF(LTRIM(RTRIM(ccp.NumeroCcp)), '') IS NOT NULL);
+
+                SET @Encoladas = @@ROWCOUNT;
+
+                IF @Encoladas = 0
+                    THROW 51228,
+                        'CONFLICTO_CCP: no hay CCP registrada. Cargue la certificacion presupuestaria antes de emitir la orden.',
+                        1;
+
+                MERGE requerimiento.OrdenServicio AS d
+                USING (
+                    SELECT r.IdRequerimiento,
+                           CorreoLocador = COALESCE(
+                               NULLIF(LTRIM(RTRIM(JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Email'))), ''),
+                               NULLIF(LTRIM(RTRIM(JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Email'))), '')),
+                           CorreoAu = NULLIF(LTRIM(RTRIM(u.Correo)), '')
+                      FROM @Lote AS l
+                      JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                      JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                      LEFT JOIN sigcm.Usuario AS u ON u.IdUsuario = r.IdResponsable
+                ) AS s
+                ON d.IdRequerimiento = s.IdRequerimiento
+                WHEN MATCHED THEN
+                    UPDATE SET d.EstadoIntegracion = 'PENDIENTE',
+                               d.ErrorIntegracion = NULL,
+                               d.CorreoLocador = COALESCE(s.CorreoLocador, d.CorreoLocador),
+                               d.CorreoAreaUsuaria = COALESCE(s.CorreoAu, d.CorreoAreaUsuaria),
+                               d.UsuarioModificacionAuditoria = @Cuenta,
+                               d.FechaModificacionAuditoria = @Ahora,
+                               d.EquipoModificacionAuditoria = @Equipo,
+                               d.ProgramaModificacionAuditoria = @Programa
+                WHEN NOT MATCHED THEN
+                    INSERT (IdRequerimiento, EstadoIntegracion, CorreoLocador, CorreoAreaUsuaria,
+                            UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+                    VALUES (s.IdRequerimiento, 'PENDIENTE', s.CorreoLocador, s.CorreoAu,
+                            @Cuenta, @Equipo, @Programa);
+            END
             ELSE
             BEGIN
                 DECLARE @errOp nvarchar(400) = CONCAT(

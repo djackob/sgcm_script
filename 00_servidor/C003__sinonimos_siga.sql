@@ -80,7 +80,16 @@ INSERT INTO @tablas (tabla) VALUES
     /* Pedidos del area usuaria: combo del requerimiento (REQ-02 / siga.vwPedido)
        y lineas del pedido (REQ-02 / siga.vwPedidoItem). */
     (N'SIG_PEDIDOS'),
-    (N'SIG_DETALLE_PEDIDOS');
+    (N'SIG_DETALLE_PEDIDOS'),
+    /* Cuadro de adquisicion de servicios y enlace pedido -> cuadro (O/S) */
+    (N'SIG_CUADRO_ADQUISICION'),
+    (N'SIG_DETALLE_PEDIDO_CUADRO'),
+    (N'SIG_DETALLE_BSERV_CUADRO'),
+    (N'SIG_DETALLE_ANEXO_CUADRO'),
+    (N'SIG_DETALLE_PEDIDOS_ANEXO'),
+    (N'SIG_ORDEN_ITEM'),
+    (N'SIG_ORDEN_ITEM_ANEXO'),
+    (N'SIG_CONTRATISTAS');
 
 DECLARE @tabla sysname, @sql nvarchar(max), @creados int = 0;
 
@@ -89,7 +98,8 @@ OPEN cur;
 FETCH NEXT FROM cur INTO @tabla;
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    IF OBJECT_ID(N'siga.' + QUOTENAME(@tabla), N'SN') IS NOT NULL
+    IF EXISTS (SELECT 1 FROM sys.synonyms
+                WHERE name = @tabla AND SCHEMA_NAME(schema_id) = N'siga')
     BEGIN
         SET @sql = N'DROP SYNONYM siga.' + QUOTENAME(@tabla) + N';';
         EXEC sys.sp_executesql @sql;

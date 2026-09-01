@@ -134,6 +134,9 @@ BEGIN
     VALUES (N'usp_ext_incluir_item_cmn'),
            (N'usp_ext_excluir_item_cmn'),
            (N'usp_ext_aprobar_solicitud_cmn'),
+           (N'usp_ext_crear_cuadro_adquisicion_desde_pedido'),
+           (N'usp_ext_crear_orden_servicio_desde_cuadro'),
+           (N'usp_ext_registrar_requerimiento'),
            /* Queda enlazado por compatibilidad, pero W001 ya no lo invoca:
               escribe en la ruta de formulacion, que esta cerrada. */
            (N'usp_ext_registrar_item_cmn');

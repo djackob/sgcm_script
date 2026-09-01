@@ -77,8 +77,9 @@ INSERT INTO @inventario (tipo, cantidad, esperado) VALUES
        aqui obliga a corregir el inventario en cada incorporacion y hace fallar
        la instalacion por un motivo que no es un problema. Cuales existen y a
        donde apuntan se sigue listando abajo, que es lo que de verdad importa. */
+    /* Debe coincidir con el INSERT de C003 (tablas, no usp_ext_*). */
     (N'Sinonimos tablas SIGA', (SELECT COUNT(*) FROM sys.synonyms
-                                   WHERE name NOT LIKE N'usp[_]%'), 17),
+                                   WHERE name NOT LIKE N'usp[_]%'), 25),
     (N'Sinonimos proc. SIGA', (SELECT COUNT(*) FROM sys.synonyms
                                            WHERE name LIKE N'usp[_]%'), NULL),
     (N'Secuencias',     (SELECT COUNT(*) FROM sys.sequences), NULL),
@@ -170,7 +171,52 @@ BEGIN
 END
 
 /* -------------------------------------------------------------------------- */
-/* 5. Semilla aplicada                                                        */
+/* 5. Extensiones SIGA (usp_ext_*)                                            */
+/* -------------------------------------------------------------------------- */
+
+DECLARE @bdSigaProc sysname;
+SELECT TOP 1 @bdSigaProc = PARSENAME(sy.base_object_name, 3)
+  FROM sys.synonyms AS sy
+ WHERE SCHEMA_NAME(sy.schema_id) = N'siga';
+IF @bdSigaProc IS NULL
+    SET @bdSigaProc = N'SIGA_1750';
+
+DECLARE @procReq TABLE (nombre sysname NOT NULL PRIMARY KEY);
+INSERT INTO @procReq (nombre) VALUES
+    (N'usp_ext_incluir_item_cmn'),
+    (N'usp_ext_excluir_item_cmn'),
+    (N'usp_ext_aprobar_solicitud_cmn'),
+    (N'usp_ext_crear_cuadro_adquisicion_desde_pedido'),
+    (N'usp_ext_crear_orden_servicio_desde_cuadro');
+
+SELECT N'5. SIGA USP_EXT' AS bloque,
+       r.nombre,
+       CASE WHEN OBJECT_ID(@bdSigaProc + N'.dbo.' + r.nombre, N'P') IS NULL
+            THEN N'*** FALTA EN ' + @bdSigaProc + N' ***'
+            ELSE N'OK' END AS estado
+  FROM @procReq AS r
+ ORDER BY r.nombre;
+
+IF EXISTS (
+    SELECT 1 FROM @procReq AS r
+     WHERE OBJECT_ID(@bdSigaProc + N'.dbo.' + r.nombre, N'P') IS NULL)
+BEGIN
+    PRINT '[ERROR] Faltan procedimientos usp_ext_* en SIGA. El instalador debe aplicar SIGA/integracion/usp_ext_*.sql.';
+    SET @errores = @errores + 1;
+END
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.check_constraints
+     WHERE name = N'CK_integracion_Operacion_Operacion'
+       AND definition LIKE N'%CREAR_CUADRO_ADQUISICION%'
+       AND definition LIKE N'%CREAR_ORDEN_SERVICIO%')
+BEGIN
+    PRINT '[ERROR] El outbox no admite CREAR_CUADRO_ADQUISICION / CREAR_ORDEN_SERVICIO (falta V023).';
+    SET @errores = @errores + 1;
+END
+
+/* -------------------------------------------------------------------------- */
+/* 6. Semilla aplicada                                                        */
 /* -------------------------------------------------------------------------- */
 
 DECLARE @filas TABLE (tabla sysname NOT NULL, filas int NOT NULL);
@@ -182,7 +228,7 @@ UNION ALL SELECT N'sigcm.Rol',         COUNT(*) FROM sigcm.Rol
 UNION ALL SELECT N'sigcm.Estado',      COUNT(*) FROM sigcm.Estado
 UNION ALL SELECT N'sigcm.Transicion',  COUNT(*) FROM sigcm.Transicion;
 
-SELECT N'5. SEMILLA' AS bloque, tabla, filas,
+SELECT N'6. SEMILLA' AS bloque, tabla, filas,
        CASE WHEN filas = 0 THEN N'*** VACIA ***' ELSE N'OK' END AS estado
   FROM @filas
  ORDER BY tabla;
@@ -194,7 +240,7 @@ BEGIN
 END
 
 /* -------------------------------------------------------------------------- */
-/* 6. Veredicto                                                               */
+/* 7. Veredicto                                                               */
 /* -------------------------------------------------------------------------- */
 
 PRINT '';

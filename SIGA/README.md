@@ -3,9 +3,11 @@
 Esta carpeta contiene lo que toca la base **`SIGA_1750`**, que **no es nuestra**:
 es del producto SIGA, del MEF. Todo lo de aquí se trata con esa regla en mente.
 
-> **Sólo dos archivos de esta carpeta se ejecutan en `SIGA_1750`**, y requieren
-> autorización del propietario. Los otros `.sql` son referencia,
-> descubrimiento o historia. Ejecutar el que no es puede hacer daño.
+> **Sólo estos archivos de esta carpeta se ejecutan en `SIGA_1750`**, y
+> requieren autorización del propietario en entornos compartidos. En local los
+> aplica `../instalar.ps1` en el mismo golpe que DBSIGCM. El resto de `.sql`
+> son referencia, descubrimiento o pruebas de homologación: ejecutarlos puede
+> escribir datos de prueba.
 
 ---
 
@@ -13,12 +15,22 @@ es del producto SIGA, del MEF. Todo lo de aquí se trata con esa regla en mente.
 
 | Archivo | ¿Se ejecuta? | Dónde | Qué es |
 |---|---|---|---|
-| `integracion/usp_ext_registrar_item_cmn.sql` | **SÍ**, previa autorización | `SIGA_1750` | Crea `dbo.usp_ext_registrar_item_cmn` para inclusiones |
-| `integracion/usp_ext_excluir_item_cmn.sql` | **SÍ**, previa autorización | `SIGA_1750` | Crea `dbo.usp_ext_excluir_item_cmn`; conserva el original, crea la solicitud visible y excluye idempotentemente las cuatro filas anuales |
-| `integracion/usp_ext_crear_orden_servicio_desde_cuadro.sql` | Todavía no | `SIGA_1750` | Propuesta para la Orden de Servicio. Es del módulo Ejecución, fuera del alcance de la v1 |
-| `integracion/descubrimiento/01_perfilado_cmn.sql` | Opcional | `SIGA_1750` | **Sólo lectura.** Sin `INSERT`/`UPDATE`/`DELETE`/DDL. Sirve para verificar qué par de tablas usa el CMN en esa instancia |
-| `integracion/ESQUEMA_dbo.sql` | **NO. NUNCA** | — | Volcado de Navicat del esquema completo de `SIGA_1750`, 139 000 líneas. Es documentación para leer, no un script para correr |
-| `integracion/script.sql` | **NO** | — | La primera encarnación del SIGCM en PostgreSQL. Se conserva como referencia histórica (etapa 2 del mapa de implementación) |
+| `integracion/usp_ext_incluir_item_cmn.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Inclusión CMN (ruta de modificación) |
+| `integracion/usp_ext_excluir_item_cmn.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Exclusión CMN |
+| `integracion/usp_ext_aprobar_solicitud_cmn.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Aprobación / consolidación de la solicitud CMN |
+| `integracion/usp_ext_crear_cuadro_adquisicion_desde_pedido.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Autoriza el pedido de servicio y genera el cuadro |
+| `integracion/usp_ext_crear_orden_servicio_desde_cuadro.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Emite la O/S pendiente desde el cuadro |
+| `integracion/usp_ext_registrar_item_cmn.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Inclusión por ruta de formulación (legado; W001 ya no lo llama) |
+| `integracion/usp_ext_registrar_requerimiento.sql` | **SÍ** (`instalar.ps1`) | `SIGA_1750` | Alta de pedido SIGA desde CMN (disponible, no lo usa el worker de locación) |
+| `integracion/descubrimiento/01_perfilado_cmn.sql` | Opcional | `SIGA_1750` | **Sólo lectura.** |
+| `integracion/ESQUEMA_dbo.sql` | **NO. NUNCA** | — | Volcado de Navicat. Documentación, no un script para correr |
+| `integracion/solo_desarrollo/*.sql` | **NO. Nunca en producción** | copia local | Usuarios, menús, privilegios y claves de SIGA (`GLUNA`, `IRIVERA`, `HBOJORQUEZ`). Exigen `-v entorno="DESARROLLO"` |
+
+Los scripts que **solo mueven data de un expediente concreto** de esta máquina
+(`copiar_tdr_cuadro_3562.sql`, `preparar_prueba_cuadro_pedido_007662.sql`,
+`homologar_cuadro_adquisicion_pedido_001067.sql` y similares) **no van a git**:
+están en `.gitignore`. En el ANIN el TDR y el cuadro salen del flujo
+(`Generar cuadro` / `Emitir O/S` + `usp_ext_*`).
 
 `entregables/` son los manuales en Word y PDF, más sus imágenes. No hay nada que
 ejecutar ahí.
@@ -28,46 +40,45 @@ ejecutar ahí.
 ## Los procedimientos que se instalan
 
 ```
-integracion/usp_ext_registrar_item_cmn.sql
-integracion/usp_ext_excluir_item_cmn.sql
+integracion/usp_ext_*.sql
 ```
 
-Se ejecutan **dentro de `SIGA_1750`** y crean procedimientos almacenados. El de
-inclusión recibe un ítem con sus cantidades mensuales y lo inserta en
-`SIG_CUADRO_NECESIDAD` y `SIG_CUADRO_NECESIDAD_DET`. El de exclusión conserva
-las cantidades en `SIG_CUADRO_MODIFICADO_DET_ORI`, crea
-`SIG_SOLICITUD_MODIFICACION` en estado `2` (V.B. Jefe), agrega sus cuatro filas
-en `_DET`, registra `SIG_DOCUMENTO_ESTADO` y deja el ítem en estado `E`.
-
-Lo que **no** hace, y es tan importante como lo que hace:
-
-- deja el ítem en `ESTADO = '5'` (pendiente de consolidación), **no** lo pasa a `'6'`
-- no consolida el cuadro
-- no toca el techo presupuestal
-- no modifica ninguna tabla que no sean esas dos
-
-Está escrito para el nivel de compatibilidad **100** de `SIGA_1750`: parámetros
-tipados y XML, nada de JSON. Esa es la frontera del diseño (ver más abajo).
+`instalar.ps1` los descubre por nombre y los aplica **todos** sobre `SIGA_1750`
+antes de crear los sinónimos de DBSIGCM. Son `DROP`+`CREATE` (o equivalentes)
+idempotentes: reejecutar no duplica objetos.
 
 ```bash
-sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_registrar_item_cmn.sql
-sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_excluir_item_cmn.sql
+# Lo normal: un solo comando. Recrea DBSIGCM y reescribe los usp_ext en SIGA.
+.\instalar.ps1 -Recrear -ConDatosPrueba
 ```
 
-### Antes de ejecutarlo
+Si SIGA se restauró desde un backup del MEF, el mismo comando vuelve a dejar
+los siete procedimientos. **El instalador no borra ni crea `SIGA_1750`.**
 
-Es un cambio dentro de una base de otro dueño. **Es un trámite, no una tarea de
-programación.** El orden es:
+**Usuarios de SIGA.** Menús, roles, privilegios y claves (`GLUNA`, `IRIVERA`,
+`HBOJORQUEZ`, `SIGAMEF`) se tocan solo en la copia local, con los scripts de
+`integracion/solo_desarrollo/`. No entran en `instalar.ps1` y **no pasan a
+producción**. En el ANIN esos usuarios los administra el dueño de SIGA.
 
-1. El ANIN revisa el procedimiento y autoriza su instalación.
-2. El equipo de SIGA lo instala en el entorno que corresponda.
-3. Del lado nuestro no hay que hacer nada más: la próxima corrida de
-   `instalar.ps1` detecta que el procedimiento existe y `W001` crea solo el
-   sinónimo hacia él.
+A mano, si hiciera falta:
 
-Mientras no ocurra, el SIGCM sigue funcionando: la escritura hacia SIGA queda en
-**modo simulación**, que hace toda la traducción y muestra qué habría mandado,
-sin tocar nada.
+```bash
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_incluir_item_cmn.sql
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_excluir_item_cmn.sql
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_aprobar_solicitud_cmn.sql
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_crear_cuadro_adquisicion_desde_pedido.sql
+sqlcmd -S "<servidor>" -d SIGA_1750 -E -b -I -i SIGA/integracion/usp_ext_crear_orden_servicio_desde_cuadro.sql
+```
+
+### En local vs. en el ANIN
+
+En la máquina de desarrollo `instalar.ps1` aplica los `usp_ext_*` en el mismo
+golpe. En desarrollo compartido, QA y producción sigue siendo un trámite: el
+propietario de SIGA autoriza y el DBA los instala (o corre el instalador con
+cuenta que pueda escribir en SIGA).
+
+Sin esos procedimientos, el SIGCM funciona igual y la escritura queda en
+**modo simulación**.
 
 ---
 
@@ -146,36 +157,32 @@ ninguna rutina del contrato. El detalle está medido en
 
 | # | Qué | Dónde | Quién |
 |---|---|---|---|
-| 1 | `instalar.ps1` — la serie completa | `DBSIGCM` | nosotros |
-| 2 | `00_servidor/C002__acceso_lectura_siga.sql` | `SIGA_1750` | DBA del ANIN, con autorización |
-| 3 | `SIGA/integracion/usp_ext_registrar_item_cmn.sql` | `SIGA_1750` | equipo de SIGA, con autorización |
-| 4 | `instalar.ps1` otra vez | `DBSIGCM` | nosotros — ahora `W001` sí crea el sinónimo |
-| 5 | El worker .NET que drene la cola | — | **no existe todavía** |
+| 0 | Restaurar `SIGA_1750` desde el backup del MEF | instancia | DBA — **nunca** se crea con nuestros scripts |
+| 1 | `instalar.ps1 -Recrear -ConDatosPrueba` | `SIGA_1750` + `DBSIGCM` | nosotros: `usp_ext_*`, sinónimos, V/F/W/S |
+| 2 | `C002__acceso_lectura_siga.sql` | `SIGA_1750` | DBA del ANIN (en local no hace falta) |
+| 3 | Worker .NET con `IntegracionSiga:Habilitado=true` y `Modo=real` | API | nosotros |
 
-Los pasos 2 y 3 son los únicos que tocan `SIGA_1750`, y **ninguno de los dos se
-ejecuta sin permiso del propietario de la base.**
-
-- **C002** concede lectura: crea el rol `sigcm_lector_siga` con `SELECT` sobre 14
-  tablas nominadas. Cero escritura, cero `db_datareader`, cero cambios de
-  esquema. No crea logins ni maneja contraseñas — eso lo hace el DBA. **En local
-  no hace falta**, porque se trabaja con una cuenta sysadmin.
-- **usp_ext_registrar_item_cmn** habilita la escritura, y sólo la del CMN.
-
-Sin el paso 3, todo lo demás funciona igual y la escritura queda en simulación.
-Sin el paso 5, las operaciones se quedan en `integracion.Operacion` esperando; se
-pueden drenar a mano con `EXEC integracion.paEscribirCuadroModificado`.
+`C002` concede lectura: rol `sigcm_lector_siga` con `SELECT` sobre tablas
+nominadas. En local no hace falta, porque se trabaja con una cuenta sysadmin.
 
 ---
 
 ## Cómo comprobar en qué punto está un entorno
 
 ```sql
--- ¿El procedimiento está instalado en SIGA?
-SELECT name FROM SIGA_1750.sys.procedures WHERE name = 'usp_ext_registrar_item_cmn';
+-- ¿Los procedimientos de integracion estan en SIGA?
+SELECT name
+  FROM SIGA_1750.sys.procedures
+ WHERE name LIKE 'usp_ext_%'
+ ORDER BY name;
 
--- ¿DBSIGCM tiene el sinónimo hacia él? (lo crea W001, y sólo si el de arriba existe)
-SELECT name, base_object_name FROM sys.synonyms WHERE name = 'usp_ext_registrar_item_cmn';
+-- ¿DBSIGCM tiene los sinonimos? (los crea W001/W002/W003 si el proc existe)
+SELECT name, base_object_name
+  FROM sys.synonyms
+ WHERE name LIKE 'usp_ext_%'
+ ORDER BY name;
 ```
 
-Si la primera consulta no devuelve nada, ese entorno está en modo simulación y es
-lo esperado.
+Si la primera consulta no devuelve las cinco rutinas que usa el worker
+(`incluir`, `excluir`, `aprobar`, `crear_cuadro`, `crear_orden`), falta correr
+`instalar.ps1` (o se omitió con `-OmitirSigaExt`).

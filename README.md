@@ -46,10 +46,10 @@ El orden exacto de aplicación está en `db/README.md`. Los prefijos mandan:
 ## Instalar
 
 ```powershell
-# Instalación o actualización normal, respeta la base existente
+# Instalación o actualización normal, respeta DBSIGCM y reescribe usp_ext en SIGA
 .\instalar.ps1
 
-# Rearmar desde cero: BORRA DBSIGCM y la recrea igual a desarrollo
+# Rearmar desde cero: BORRA DBSIGCM (no SIGA) y reaplica toda la serie + usp_ext
 .\instalar.ps1 -Recrear
 
 # Con los usuarios ficticios para probar sin SSO (solo local)

@@ -50,7 +50,7 @@ INSERT INTO @Regla VALUES
 
   ('CMN_REVISION_UA',
    'Revision del Anexo 3 por la Unidad de Abastecimiento',
-   'CMN_EN_EVAL_UA', 2, 'HABIL', 0,
+   'CMN_EN_ABAST_ESP', 2, 'HABIL', 0,
    'PENDIENTE_CONFIRMACION - analogia con revision de requerimiento'),
 
   ('CMN_SUBSANACION',

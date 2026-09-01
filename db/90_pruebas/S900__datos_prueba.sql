@@ -1,4 +1,4 @@
-﻿/*
+/*
 ===============================================================================
   SIGCM - S900 : Datos de prueba
   Motor  : SQL Server 2022 (compat 160)
@@ -83,6 +83,11 @@ IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-OA')
     INSERT INTO sigcm.Unidad (Codigo, Nombre, Sigla, EsAreaUsuaria,
                               UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
     VALUES ('UO-OA', 'Oficina de Administracion', 'OA', 0, 'seed', 'localhost', 'S900');
+
+IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-OPP')
+    INSERT INTO sigcm.Unidad (Codigo, Nombre, Sigla, EsAreaUsuaria,
+                              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+    VALUES ('UO-OPP', 'Oficina de Planeamiento y Presupuesto', 'OPP', 0, 'seed', 'localhost', 'S900');
 
 /*
   AREAS USUARIAS REALES, PARA PROBAR EL ANEXO 4 MULTIPLE
@@ -176,6 +181,7 @@ INSERT INTO @Usuario VALUES
   ('prueba.coordinador',  'Pedro',  'Alvarez Nunez',   'Coordinador del area usuaria'),
   ('prueba.jefe',         'Carlos', 'Mendoza Diaz',    'Jefe del area usuaria'),
   ('prueba.oa',           'Lucia',  'Fernandez Paz',   'Analista de la Oficina de Administracion'),
+  ('prueba.opp',          'Laura',  'Castillo Vega',   'Analista de Planeamiento y Presupuesto'),
   ('prueba.abast.esp',    'Sofia',  'Herrera Cordova', 'Especialista de Abastecimiento'),
   ('prueba.abastecim',    'Jorge',  'Ramos Salazar',   'Coordinador de Abastecimiento'),
   ('prueba.abast.jefe',   'Raul',   'Vega Tapia',      'Jefe de la Unidad de Abastecimiento'),
@@ -225,6 +231,7 @@ INSERT INTO @Asignacion VALUES
   ('prueba.coordinador',  'AREA_COORDINADOR',   'UO-PRUEBA', 0),
   ('prueba.jefe',         'AREA_JEFE',          'UO-PRUEBA', 1),
   ('prueba.oa',           'OA',                 'UO-OA',     0),
+  ('prueba.opp',          'OPP',                'UO-OPP',    1),
   ('prueba.abast.esp',    'ABAST_ESPECIALISTA', 'UO-ABAST',  0),
   ('prueba.abastecim',    'ABAST_COORDINADOR',  'UO-ABAST',  0),
   ('prueba.abast.jefe',   'ABAST_JEFE',         'UO-ABAST',  1),
@@ -271,6 +278,20 @@ DELETE d
                     WHERE a.Cuenta = u.Cuenta
                       AND a.CodigoRol = d.CodigoRol
                       AND n.IdUnidad = d.IdUnidad);
+
+/*
+  Expedientes en etapa OPP que quedaron en la unidad de Abastecimiento porque
+  antes no existia UO-OPP ni un usuario con rol OPP: la bandeja filtra por
+  IdUnidadActual + RolResponsable y nadie los veia.
+*/
+UPDATE e
+   SET e.IdUnidadActual = uOpp.IdUnidad
+  FROM sigcm.Expediente AS e
+  JOIN sigcm.Estado AS w ON w.CodigoEstado = e.CodigoEstado
+  JOIN sigcm.Unidad AS uOpp ON uOpp.Codigo = 'UO-OPP'
+ WHERE w.RolResponsable = 'OPP'
+   AND e.Anulado = 0 AND e.Activo = 1
+   AND e.IdUnidadActual <> uOpp.IdUnidad;
 GO
 
 DECLARE @msg varchar(300) =

@@ -18,7 +18,8 @@
 
       .\instalar.ps1
 
-  Rearmar la base desde cero (BORRA DBSIGCM y la recrea igual a desarrollo):
+  Rearmar DBSIGCM desde cero y reaplicar las extensiones usp_ext_* en SIGA
+  (NO borra la base SIGA; esa es del MEF y se restaura por backup):
 
       .\instalar.ps1 -Recrear
 
@@ -34,12 +35,26 @@
 
       .\instalar.ps1 -Servidor "192.168.40.75" -Usuario developer_anin
 
+  Si no pasas -Servidor, el instalador prueba 127.0.0.1, localhost y
+  localhost\SQLSERVER25 y se queda con la instancia que tenga SIGA_1750.
+
   NOTA SOBRE C002
   ---------------
   C002__acceso_lectura_siga.sql NO forma parte de esta serie. Concede permisos
   DENTRO de la base SIGA y requiere autorizacion del propietario; ademas en
   local no hace falta, porque se trabaja con una cuenta sysadmin. Se ejecuta a
   mano en los entornos donde corresponda.
+
+  NOTA SOBRE SIGA
+  ---------------
+  Este instalador NO crea ni borra SIGA_1750. Aplica los usp_ext_*.sql de
+  SIGA/integracion/ sobre la base SIGA que ya existe (copia restaurada del MEF).
+  Si restauras SIGA desde un backup limpio, corre el mismo comando: las
+  extensiones vuelven a crearse en el mismo golpe que DBSIGCM.
+
+  Los scripts de usuarios, menus y claves de SIGA (GLUNA, IRIVERA, HBOJORQUEZ)
+  viven en SIGA/integracion/solo_desarrollo/ y NUNCA se aplican aqui: son
+  solo de la copia local y no pasan a produccion.
 ===============================================================================
 #>
 
@@ -50,7 +65,8 @@ param(
     [string]$Usuario        = "",
     [switch]$Recrear,
     [switch]$ConDatosPrueba,
-    [switch]$SoloVerificar
+    [switch]$SoloVerificar,
+    [switch]$OmitirSigaExt
 )
 
 $ErrorActionPreference = "Stop"
@@ -170,11 +186,14 @@ function Ejecutar([string]$ruta, [string]$baseDestino, [string[]]$variables) {
 # Arranque
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Arranque
+# ---------------------------------------------------------------------------
+
 Titulo "SIGCM - Instalacion de la base de datos"
-Escribir ("  Servidor  : {0}" -f $Servidor)
 Escribir ("  Base      : {0}" -f $Base)
 Escribir ("  Base SIGA : {0}" -f $BaseSiga)
-Escribir ("  Modo      : {0}" -f $(if ($Recrear) { "RECREAR (borra la base)" } else { "actualizar" }))
+Escribir ("  Modo      : {0}" -f $(if ($Recrear) { "RECREAR (borra DBSIGCM, no SIGA)" } else { "actualizar" }))
 Escribir ("  Bitacora  : {0}" -f $bitacora)
 
 if (-not (Verificar-Fuentes)) {
@@ -191,6 +210,33 @@ if ($SoloVerificar) {
 
 $varSiga = @("bdSiga=$BaseSiga")
 
+function Probar-Instancia([string]$instancia) {
+    $argumentos = @("-S", $instancia, "-d", "master", "-b", "-h", "-1", "-W",
+                    "-Q", "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = N'$BaseSiga';")
+    if ($Usuario -ne "") { $argumentos += @("-U", $Usuario) } else { $argumentos += "-E" }
+    $salida = & sqlcmd $argumentos 2>&1 | Out-String
+    return ($LASTEXITCODE -eq 0 -and $salida -match [regex]::Escape($BaseSiga))
+}
+
+if (-not $PSBoundParameters.ContainsKey("Servidor")) {
+    $candidatos = @("127.0.0.1", "localhost", "localhost\SQLSERVER25", ".")
+    $encontrado = $null
+    foreach ($candidato in $candidatos) {
+        if (Probar-Instancia $candidato) {
+            $encontrado = $candidato
+            break
+        }
+    }
+    if ($encontrado) {
+        $Servidor = $encontrado
+    }
+    else {
+        Escribir ("  [AVISO] No se encontro {0} en 127.0.0.1 / localhost / SQLSERVER25. Se usara {1}." -f $BaseSiga, $Servidor) "Yellow"
+    }
+}
+
+Escribir ("  Servidor  : {0}" -f $Servidor)
+
 # ---------------------------------------------------------------------------
 # 2. Servidor
 # ---------------------------------------------------------------------------
@@ -205,6 +251,27 @@ if ($Recrear) {
 } else {
     $c001 = Join-Path $raiz "00_servidor\C001__crear_dbsigcm.sql"
     if (-not (Ejecutar $c001 "master" $varSiga)) { exit 1 }
+}
+
+# ---------------------------------------------------------------------------
+# 2b. Extensiones dentro de SIGA (usp_ext_*). No se borra SIGA_1750.
+# ---------------------------------------------------------------------------
+
+if (-not $OmitirSigaExt) {
+    Titulo "2b. Extensiones SIGA (usp_ext_*)"
+    $carpetaSigaExt = Join-Path $raiz "SIGA\integracion"
+    $sigaExt = @(Get-ChildItem -Path $carpetaSigaExt -Filter "usp_ext_*.sql" -ErrorAction SilentlyContinue |
+                 Sort-Object Name)
+    if ($sigaExt.Count -eq 0) {
+        Escribir "     [ERROR] No hay SIGA/integracion/usp_ext_*.sql." "Red"
+        exit 1
+    }
+    foreach ($archivo in $sigaExt) {
+        if (-not (Ejecutar $archivo.FullName $BaseSiga $varSiga)) { exit 1 }
+    }
+}
+else {
+    Escribir "  OmitirSigaExt: no se reaplican usp_ext_* sobre $BaseSiga." "Yellow"
 }
 
 if (-not (Ejecutar (Join-Path $raiz "00_servidor\C003__sinonimos_siga.sql") $Base $varSiga)) { exit 1 }

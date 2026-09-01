@@ -149,7 +149,7 @@ GO
 
 DECLARE @RolModulo TABLE (CodigoRol varchar(40), CodigoModulo varchar(30));
 INSERT INTO @RolModulo VALUES
-  ('AREA_JEFE','CMN'), ('AREA_COORDINADOR','CMN'), ('AREA_ESPECIALISTA','CMN'), ('OA','CMN'),
+  ('AREA_JEFE','CMN'), ('AREA_ESPECIALISTA','CMN'), ('OA','CMN'),
   ('ABAST_JEFE','CMN'), ('ABAST_COORDINADOR','CMN'), ('ABAST_ESPECIALISTA','CMN'),
   ('ADMIN_SISTEMA','CMN');
 

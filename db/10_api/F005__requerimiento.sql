@@ -5,10 +5,11 @@
   Ambito : [DBSIGCM]
   Bloque de errores: 51400-51499
 
-  Cubre las reglas REQ-01 a REQ-14 de Analisis/reglas-negocio-mockup.md.
-  Las acciones del flujo (derivar, firmar, remitir, observar, declarar conforme)
-  NO estan aqui: son transiciones y las ejecuta sigcm.paEjecutarTransicion con
-  la configuracion que siembra S003.
+  Cubre las reglas REQ-01 a REQ-14 de Analisis/reglas-negocio-mockup.md y la
+  validacion de ocho UIT de locacion (monto mensual x entregables). Las acciones
+  del flujo (derivar, firmar, remitir, observar, declarar conforme) NO estan
+  aqui: son transiciones y las ejecuta sigcm.paEjecutarTransicion con S003/S004.
+  Filtros, CCP y orden: F008 (requiere V016).
 
   ---------------------------------------------------------------------------
   SOBRE DE ENTRADA de requerimiento.paRegistrarRequerimiento
@@ -218,6 +219,38 @@ BEGIN
 
         IF @Monto IS NULL OR @Monto <= 0
             THROW 51412, 'VALIDACION_MONTO: el monto del requerimiento debe ser mayor que cero.', 1;
+
+        /* Locacion: el tope se calcula con monto mensual x entregables de cada
+           fila del Anexo 5, no solo con el monto declarado de cabecera. */
+        IF @CodigoTipoContratacion = 'LOCACION'
+        BEGIN
+            DECLARE @MontoLocacion decimal(18,2) = 0;
+
+            IF ISJSON(@DatosAdicionales) = 1
+            BEGIN
+                SELECT @MontoLocacion = ISNULL(SUM(
+                           ISNULL(TRY_CONVERT(decimal(18,2), JSON_VALUE(p.value, '$.MontoMensual')), 0)
+                         * ISNULL(TRY_CONVERT(int, JSON_VALUE(p.value, '$.CantidadEntregables')), 0)
+                       ), 0)
+                  FROM OPENJSON(@DatosAdicionales, '$.Proveedores') AS p;
+
+                IF @MontoLocacion = 0
+                    SET @MontoLocacion =
+                        ISNULL(TRY_CONVERT(decimal(18,2), JSON_VALUE(@DatosAdicionales, '$.Proveedor.MontoMensual')), 0)
+                      * ISNULL(TRY_CONVERT(int, JSON_VALUE(@DatosAdicionales, '$.Proveedor.CantidadEntregables')), 0);
+            END
+
+            IF @MontoLocacion > @MontoTope
+            BEGIN
+                DECLARE @errTopeLoc nvarchar(500) = CONCAT(
+                    'VALIDACION_MONTO: el calculo monto mensual x entregables (S/ ',
+                    CONVERT(varchar(30), @MontoLocacion),
+                    ') supera el tope de ocho UIT para ', @AnoEje, ', que es S/ ',
+                    CONVERT(varchar(30), @MontoTope), ' (UIT S/ ', CONVERT(varchar(30), @ValorUit),
+                    '). Una contratacion mayor no se tramita por esta via.');
+                THROW 51413, @errTopeLoc, 1;
+            END
+        END
 
         IF @Monto > @MontoTope
         BEGIN
@@ -570,6 +603,11 @@ GO
 /* Requerimiento completo: cabecera, pedidos e items. Es lo que consume el visor
    y el formulario cuando esta editable (REQ-11).
 
+   No une vistas SIGA (catalogo, unidad de medida, centro de costo): esas lecturas
+   remotas pueden superar el timeout de 30 s del puente y dejan el Anexo 5 a
+   medias despues de un grabado correcto. El nombre del area sale de sigcm.Unidad
+   y la descripcion del item de RequerimientoItem.DescripcionServicio.
+
    Entrada: { "Actor": {...}, "IdRequerimiento": "..." } */
 CREATE OR ALTER PROCEDURE requerimiento.paObtenerRequerimiento
     @parametro nvarchar(max)
@@ -623,7 +661,7 @@ BEGIN
                    e.IdExpediente, e.CodigoEstado, e.Version, e.Anulado,
                    Estado = w.Nombre,
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
-                   CentroCostoNombre = cc.NombreDepend,
+                   CentroCostoNombre = ISNULL(un.Nombre, r.CentroCosto),
                    /* Si se apoya en una modificacion del CMN, se devuelve su
                       codigo: el visor la muestra sin una segunda consulta. */
                    SolicitudCmn = (SELECT TOP 1 s.Codigo FROM cmn.Solicitud AS s
@@ -642,31 +680,54 @@ BEGIN
                                                      i.ClaseBien, i.FamiliaBien, i.ItemBien),
                               i.TipoBien, i.GrupoBien, i.ClaseBien, i.FamiliaBien, i.ItemBien,
                               i.DescripcionServicio, i.UnidadMedida,
-                              UnidadAbreviatura = um.Abreviatura,
-                              Descripcion = ISNULL(cat.Descripcion, i.DescripcionServicio),
+                              UnidadAbreviatura = CONVERT(varchar(20), NULL),
+                              Descripcion = ISNULL(i.DescripcionServicio, CONVERT(varchar(350), N'')),
                               i.Cantidad, i.PrecioUnitario, i.Monto,
                               NumeroPedido = (SELECT TOP 1 p2.NumeroPedido
                                                 FROM requerimiento.RequerimientoPedido AS p2
                                                WHERE p2.IdRequerimientoPedido = i.IdRequerimientoPedido)
                          FROM requerimiento.RequerimientoItem AS i
-                         LEFT JOIN siga.vwUnidadMedida AS um ON um.UnidadMedida = i.UnidadMedida
-                         LEFT JOIN siga.vwCatalogoItem AS cat
-                                ON cat.SecEjec = r.SecEjec
-                               AND cat.TipoBien = i.TipoBien AND cat.GrupoBien = i.GrupoBien
-                               AND cat.ClaseBien = i.ClaseBien AND cat.FamiliaBien = i.FamiliaBien
-                               AND cat.ItemBien = i.ItemBien
                         WHERE i.IdRequerimiento = r.IdRequerimiento AND i.Activo = 1
                         ORDER BY i.Orden
                           FOR JSON PATH), '[]')),
+                   Filtros = JSON_QUERY(COALESCE((
+                       SELECT f.IdFiltro, f.CodigoFiltro, Tipo = ft.Nombre, ft.Orden,
+                              f.Resultado, f.Origen, f.Observacion, f.FechaVerificacion,
+                              f.GeneradoDocumentoEvidencia, f.NombreDocumentoEvidencia
+                         FROM requerimiento.FiltroIdoneidad AS f
+                         JOIN requerimiento.FiltroTipo AS ft ON ft.CodigoFiltro = f.CodigoFiltro
+                        WHERE f.IdRequerimiento = r.IdRequerimiento AND f.Activo = 1
+                          AND ft.Activo = 1
+                        ORDER BY ft.Orden
+                          FOR JSON PATH), '[]')),
+                   Ccp = JSON_QUERY((
+                       SELECT TOP 1 c.IdCcp, c.NumeroCcp, c.NumeroExpedienteSiaf, c.MontoCertificado,
+                              c.FechaSolicitud, c.FechaEmision,
+                              c.GeneradoDocumentoCcp, c.NombreDocumentoCcp,
+                              c.GeneradoDocumentoMemo, c.NombreDocumentoMemo,
+                              c.GeneradoDocumentoMemoUp, c.NombreDocumentoMemoUp,
+                              c.GeneradoDocumentoPrevision, c.NombreDocumentoPrevision,
+                              c.CuerpoMemorando, c.Observacion
+                         FROM requerimiento.CertificacionCcp AS c
+                        WHERE c.IdRequerimiento = r.IdRequerimiento AND c.Activo = 1
+                          FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)),
+                   OrdenServicio = JSON_QUERY((
+                       SELECT TOP 1 o.IdOrdenServicio, o.NumeroOrden, o.FechaEmision,
+                              o.CorreoLocador, o.CorreoAreaUsuaria, o.NotificadoEn,
+                              o.EstadoIntegracion, o.SecCuadroSiga, o.ProveedorSiga,
+                              o.ErrorIntegracion,
+                              o.GeneradoDocumento, o.NombreDocumento
+                         FROM requerimiento.OrdenServicio AS o
+                        WHERE o.IdRequerimiento = r.IdRequerimiento AND o.Activo = 1
+                          FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)),
                    'OK' AS mensaje
               FROM requerimiento.Requerimiento AS r
               JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
               JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
               JOIN sigcm.Usuario    AS u ON u.IdUsuario    = r.IdResponsable
               JOIN sigcm.TipoContratacion AS tc ON tc.CodigoTipoContratacion = r.CodigoTipoContratacion
-              LEFT JOIN siga.vwCentroCosto AS cc
-                     ON cc.AnoEje = r.AnoEje AND cc.SecEjec = r.SecEjec
-                    AND cc.CentroCosto = r.CentroCosto
+              LEFT JOIN sigcm.Unidad AS un
+                     ON un.CentroCostoSiga = r.CentroCosto AND un.Activo = 1
              WHERE r.IdRequerimiento = @IdRequerimiento
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
@@ -831,6 +892,8 @@ BEGIN
                                      AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS tr
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
+                                     AND t.CodigoTransicion <> 'REQ_REMITIR_DAI'
+                                     AND NOT (t.CodigoTransicion = 'REQ_REMITIR_OA' AND r.CodigoDec <> 'ABASTECIMIENTO')
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)

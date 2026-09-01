@@ -16,3 +16,15 @@ desktop.ini
 
 # Archivos de bloqueo que deja Word mientras un .docx esta abierto
 ~$*
+
+# Datos de una corrida local (expediente, pedido, cuadro concretos).
+# No aplican al recrear DBSIGCM en el ANIN. El flujo real usa usp_ext_*.
+SIGA/integracion/_local/
+SIGA/integracion/copiar_tdr_*.sql
+SIGA/integracion/preparar_prueba_*.sql
+SIGA/integracion/homologar_cuadro_adquisicion_pedido_*.sql
+SIGA/integracion/verificar_orden_servicio_emitida.sql
+SIGA/integracion/verificar_pedido_*_listo_os.sql
+SIGA/integracion/revertir_referencias_homologacion.sql
+SIGA/integracion/revertir_datos_prueba_*.sql
+SIGA/integracion/habilitar_demanda_adicional.sql
