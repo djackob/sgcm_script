@@ -104,11 +104,23 @@ $prohibidas = @(
 # C000B contiene esas construcciones a proposito: son sus pruebas de capacidad.
 $exentos = @("C000B__diagnostico_motor.sql")
 
+# Carpetas con SQL de OTRO motor. La premisa de la regla es "esto corre en SQL
+# Server 2022"; un script de PostgreSQL no corre ahi, y ademas usa legitimamente
+# construcciones que aqui estan prohibidas -el tipo json, sin ir mas lejos, que
+# es lo que devuelve la propia funcion del SSO-. Revisarlos seria comparar contra
+# una linea base que no es la suya.
+$carpetasExentas = @("sso")
+
 function Verificar-Fuentes {
     Titulo "1. Verificacion del codigo fuente (linea base SQL Server 2022)"
 
     $archivos = Get-ChildItem -Path $raiz -Filter "*.sql" -Recurse |
-                Where-Object { $exentos -notcontains $_.Name }
+                Where-Object { $exentos -notcontains $_.Name } |
+                Where-Object {
+                    $relativa = $_.FullName.Substring($raiz.Length + 1)
+                    $primera  = ($relativa -split '[\\/]')[0]
+                    $carpetasExentas -notcontains $primera
+                }
 
     $hallazgos = 0
     foreach ($archivo in $archivos) {

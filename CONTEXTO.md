@@ -329,6 +329,17 @@ al sistema 73**, pero sus dos accesos (`32885691` y `43552822`) están en
   `P0001` activo, pero del `id_perfil_sistema` 184, que es del sistema 66; el del
   SGCM es el **194**. Para deshacerlo, `activo = false` en ese acceso y la
   siguiente reconciliación cierra la terna.
+
+  **Y quedó versionado**, en `sso/S01__acceso_administrador.sql`. Una fila hecha
+  a mano en un servidor no sobrevive a un despliegue: si producción no repite esa
+  asignación, el mapeo de `S007` no sirve de nada porque nunca llega un
+  administrador. La carpeta `sso/` es a la base del SSO lo que
+  `SIGA/integracion/` es a la de SIGA — código versionado que corre en una base
+  ajena y que el instalador no aplica. El script **resuelve todo por código**
+  (`cod_sistema`, `cod_perfil`, `dni`) y nunca por identificador: los ids son
+  distintos en cada ambiente, y ése fue justamente el tropiezo del 184.
+  `instalar.ps1` exime esa carpeta de la verificación de fuentes, porque la
+  premisa de esa regla —«esto corre en SQL Server 2022»— no aplica a PostgreSQL.
 - **La de respaldo**: la cuenta local `admin.sigcm`, con `IdUsuarioSso` en nulo
   —así la reconciliación no la toca—. **Es inerte mientras `acceso_local` sea
   `"false"`**: el SIGCM no guarda contraseñas, así que sólo se puede usar por
