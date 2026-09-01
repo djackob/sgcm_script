@@ -37,6 +37,7 @@ según las tablas que toca. El razonamiento completo, con las mediciones, está 
 | `db/20_seed/` | `S*` — configuración: roles, estados, plazos | `DBSIGCM` |
 | `db/90_pruebas/` | `S900` — usuarios ficticios, solo local | `DBSIGCM` |
 | `docs/` | Reportes de entorno y de comparación entre entornos | — |
+| `sso/` | Provisión en la base del SSO (PostgreSQL). Exenta del verificador | — |
 | `pruebas/` | Consultas sueltas de humo, no forman parte de la serie | — |
 | `_snapshot/` | Fotos de un entorno en una fecha, para verificar | — |
 

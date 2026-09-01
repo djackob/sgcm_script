@@ -59,8 +59,28 @@
     "CodigoTransicion": "CMN_ABAST_COORD_FIRMAR_A4",
     "Comentario": "...",
     "IdUnidadDestino": null,        // opcional; ver seccion de enrutamiento
+    "IdResponsableDestino": null,   // opcional; a que PERSONA se deriva (F008)
     "Datos": { }                    // opcional, se guarda en el historial
   }
+
+  ---------------------------------------------------------------------------
+  DERIVAR A UNA PERSONA
+  ---------------------------------------------------------------------------
+  IdResponsableDestino permite que el jefe elija a quien le pasa el expediente
+  dentro del rol que el estado destino ya declaro: a un coordinador concreto, o
+  directo a un especialista. Los destinos legitimos los define el arbol de
+  sigcm.RolDerivacion y los resuelve sigcm.fnDestinatarioDerivacion (F008), la
+  MISMA funcion con la que la pantalla arma su lista. Una sola definicion: si la
+  pantalla lo ofrece, aqui se acepta.
+
+  Es OPCIONAL y omitirlo se comporta exactamente como antes. Cuando no llega, el
+  expediente queda a nombre del puesto y lo toma quien corresponda.
+
+  Y aun cuando llega, IdResponsableActual es una INDICACION, nunca el unico
+  filtro de la bandeja: cmn.paListarSolicitud sigue resolviendo por unidad y rol.
+  Si la persona se va de la entidad, su reemplazo ve el expediente sin que nadie
+  tenga que reasignarlo. Filtrar la bandeja solo por responsable volveria a
+  crear el expediente huerfano; no se haga.
 ===============================================================================
 */
 
@@ -199,6 +219,7 @@ BEGIN
                 @VersionCliente  int,
                 @Comentario      nvarchar(max),
                 @IdUnidadDestino uniqueidentifier,
+                @IdResponsableDestino uniqueidentifier,
                 @Datos           nvarchar(max);
 
         SELECT @IdExpediente     = TRY_CONVERT(uniqueidentifier, IdExpediente),
@@ -206,6 +227,7 @@ BEGIN
                @VersionCliente   = Version,
                @Comentario       = Comentario,
                @IdUnidadDestino  = TRY_CONVERT(uniqueidentifier, IdUnidadDestino),
+               @IdResponsableDestino = TRY_CONVERT(uniqueidentifier, IdResponsableDestino),
                @Datos            = Datos
         FROM OPENJSON(@parametro)
         WITH (
@@ -214,6 +236,7 @@ BEGIN
             Version          int,
             Comentario       nvarchar(max),
             IdUnidadDestino  varchar(50),
+            IdResponsableDestino varchar(50),
             Datos            nvarchar(max) AS JSON
         );
 
@@ -452,6 +475,57 @@ BEGIN
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
         END
 
+        /* ---- Derivacion a una persona --------------------------------- */
+        /*
+          El destinatario elegido tiene que ser uno de los que el arbol habilita
+          para ESTE actor en ESTE modulo, y ademas ejercer el rol que el estado
+          destino declara. Las dos condiciones, no una:
+
+          - Sin la primera, cualquier cliente podria pasarle el expediente a
+            quien quisiera con solo mandar un identificador; la lista de la
+            pantalla seria una sugerencia y no un control.
+          - Sin la segunda, un jefe podria derivar a un coordinador una
+            transicion cuyo estado destino es del especialista, y el expediente
+            quedaria a nombre de alguien que no lo ve en su bandeja.
+
+          Se valida con la misma funcion que alimenta la pantalla, para que no
+          puedan discrepar. El diagnostico distingue los dos motivos porque
+          "no autorizado" a secas deja al usuario sin saber que corregir.
+        */
+        DECLARE @UnidadResponsableDestino uniqueidentifier = NULL;
+
+        IF @IdResponsableDestino IS NOT NULL
+        BEGIN
+            SELECT @UnidadResponsableDestino = d.IdUnidad
+              FROM sigcm.fnDestinatarioDerivacion(@CodigoModulo, @CodigoRol, @IdUnidad) AS d
+             WHERE d.IdUsuario = @IdResponsableDestino
+               AND d.CodigoRol = @RolDestino;
+
+            IF @UnidadResponsableDestino IS NULL
+            BEGIN
+                DECLARE @errDest nvarchar(500);
+
+                IF EXISTS (SELECT 1 FROM sigcm.fnDestinatarioDerivacion(@CodigoModulo, @CodigoRol, @IdUnidad) AS d
+                            WHERE d.IdUsuario = @IdResponsableDestino)
+                    SET @errDest = CONCAT(
+                        'NO_AUTORIZADO: la persona elegida no ejerce el rol ', @RolDestino,
+                        ', que es al que corresponde el expediente tras la accion "', @NombreAccion, '".');
+                ELSE
+                    SET @errDest = CONCAT(
+                        'NO_AUTORIZADO: el rol ', @CodigoRol,
+                        ' no puede derivar a esa persona en el modulo ', @CodigoModulo,
+                        '. Revise sigcm.RolDerivacion o vuelva a cargar la lista de destinatarios.');
+
+                THROW 51220, @errDest, 1;
+            END
+
+            /* La unidad la manda la persona: derivar a alguien es mandarle el
+               expediente a donde esa persona ejerce, no a otra parte. Un
+               IdUnidadDestino que contradiga eso seria una instruccion
+               imposible de cumplir. */
+            SET @IdUnidadDestino = @UnidadResponsableDestino;
+        END
+
         /* ---- Escritura ------------------------------------------------ */
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @Encoladas int = 0;
@@ -512,11 +586,17 @@ BEGIN
                SET CodigoEstado                  = @EstadoDestino,
                    Version                       = @VersionNuevaExp,
                    IdUnidadActual                = @IdUnidadDestinoExp,
-                   /* El responsable concreto se deja sin fijar: la bandeja se
-                      resuelve por rol y unidad, y asignar a una persona en una
-                      unidad con varios titulares seria inventar una regla que la
-                      Directiva no establece. */
-                   IdResponsableActual           = NULL,
+                   /* Sin IdResponsableDestino el responsable concreto se deja
+                      sin fijar, como siempre: la bandeja se resuelve por rol y
+                      unidad, y asignar a una persona en una unidad con varios
+                      titulares seria inventar una regla que la Directiva no
+                      establece.
+
+                      Con el, queda a nombre de quien el jefe eligio. Sigue
+                      siendo una indicacion y no un candado: la bandeja no
+                      cambia de criterio, asi que el expediente no se pierde si
+                      esa persona deja la entidad. */
+                   IdResponsableActual           = @IdResponsableDestino,
                    CerradoEn                     = CASE WHEN @EsFinalDestino = 1
                                                         THEN @Ahora ELSE CerradoEn END,
                    UsuarioModificacionAuditoria  = @Cuenta,

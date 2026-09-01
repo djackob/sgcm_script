@@ -175,13 +175,26 @@ BEGIN
         IF ISJSON(@parametro) <> 1
             THROW 51510, 'JSON incorrecto.', 1;
 
-        DECLARE @Cuenta varchar(120), @CodigoRol varchar(40), @CodigoUnidad varchar(30);
+        DECLARE @Cuenta varchar(120), @CodigoRol varchar(40), @CodigoUnidad varchar(30),
+                @Origen varchar(10);
 
         SELECT @Cuenta       = Cuenta,
                @CodigoRol    = CodigoRol,
-               @CodigoUnidad = CodigoUnidad
+               @CodigoUnidad = CodigoUnidad,
+               @Origen       = Origen
         FROM OPENJSON(@parametro)
-        WITH (Cuenta varchar(120), CodigoRol varchar(40), CodigoUnidad varchar(30));
+        WITH (Cuenta varchar(120), CodigoRol varchar(40), CodigoUnidad varchar(30),
+              Origen varchar(10));
+
+        /* El armado de la sesion es identico venga por SSO o por el selector
+           local: misma terna, mismas validaciones, mismo menu. Lo unico que
+           cambia es esta marca, y cambia por una razon concreta: el frontend
+           decide con ella por que puerta cerrar la sesion. Una sesion abierta
+           con el SSO tiene que salir por el SSO, que es quien la invalida; una
+           local no existe para el SSO y pedirle que la cierre deja al usuario
+           atrapado. Ver sso-login.service.esSesionLocal. */
+        SET @Origen = CASE WHEN UPPER(LTRIM(RTRIM(COALESCE(@Origen, '')))) = 'SSO'
+                           THEN 'SSO' ELSE 'LOCAL' END;
 
         IF NULLIF(LTRIM(RTRIM(@Cuenta)), '') IS NULL
             THROW 51511, 'VALIDACION_PAYLOAD: falta Cuenta.', 1;
@@ -247,7 +260,7 @@ BEGIN
                               usuario            = u.Cuenta,
                               token              = '@token',
                               fecha_modificacion = CONVERT(varchar(19), GETDATE(), 126),
-                              origen             = 'LOCAL',
+                              origen             = @Origen,
                               correo    = JSON_QUERY(CASE WHEN u.Correo IS NULL THEN '[]'
                                                           ELSE '["' + u.Correo + '"]' END),
                               telefono  = JSON_QUERY('[]'),

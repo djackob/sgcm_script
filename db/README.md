@@ -35,15 +35,14 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13f | `db/00_ddl/V014__siga_vw_pedido_fuente_programa.sql` | DBSIGCM | `vwPedido`: FF/RR desde `fuente_fto` y programa de la meta |
 | 13g | `db/00_ddl/V015__cmn_tipificacion_solicitud.sql` | DBSIGCM | Solicitud ordinaria / extraordinaria con justificación |
 | 13h | `db/00_ddl/V016__requerimiento_locacion_ccp_os.sql` | DBSIGCM | Filtros de idoneidad, CCP y orden de servicio |
-| 13i | `db/00_ddl/V017__integracion_orden_servicio.sql` | DBSIGCM | Outbox CREAR_ORDEN_SERVICIO y vista cuadro/pedido |
-| 13j | `db/00_ddl/V018__filtro_idoneidad_catalogo.sql` | DBSIGCM | Catálogo RNSSC, REDAM, RPS_TCP, REDJUM, debida diligencia |
-| 13k | `db/00_ddl/V019__filtro_evidencia_memo_ccp.sql` | DBSIGCM | Evidencias PDF por filtro y cuerpo del memorando CCP |
-| 13l | `db/00_ddl/V020__ccp_carga_presupuestaria.sql` | DBSIGCM | Carga CCP / previsión presupuestal |
-| 13m | `db/00_ddl/V021__tipo_documento_ccp.sql` | DBSIGCM | Tipo de documento CCP |
-| 13n | `db/00_ddl/V022__vw_cuadro_pedido_siga.sql` | DBSIGCM | Vista cuadro de adquisición ↔ pedido |
-| 13o | `db/00_ddl/V023__crear_cuadro_adquisicion.sql` | DBSIGCM | Outbox `CREAR_CUADRO_ADQUISICION` |
-| 22b | `db/20_seed/S005__requerimiento_filtros_jerarquia.sql` | DBSIGCM | Jerarquía filtros: especialista → coordinador → jefe → OPP |
-| 22c | `db/20_seed/S006__opp_oa_solo_jefe.sql` | DBSIGCM | CCP solo OPP; OA/OPP sin jerarquía interna |
+| 13i | `db/00_ddl/V016__sso_perfil_derivacion.sql` | DBSIGCM | Padrón del SSO y árbol de derivación jefe→coordinador→especialista |
+| 13j | `db/00_ddl/V017__integracion_orden_servicio.sql` | DBSIGCM | Outbox CREAR_ORDEN_SERVICIO y vista cuadro/pedido |
+| 13k | `db/00_ddl/V018__filtro_idoneidad_catalogo.sql` | DBSIGCM | Catálogo RNSSC, REDAM, RPS_TCP, REDJUM, debida diligencia |
+| 13l | `db/00_ddl/V019__filtro_evidencia_memo_ccp.sql` | DBSIGCM | Evidencias PDF por filtro y cuerpo del memorando CCP |
+| 13m | `db/00_ddl/V020__ccp_carga_presupuestaria.sql` | DBSIGCM | Carga CCP / previsión presupuestal |
+| 13n | `db/00_ddl/V021__tipo_documento_ccp.sql` | DBSIGCM | Tipo de documento CCP |
+| 13o | `db/00_ddl/V022__vw_cuadro_pedido_siga.sql` | DBSIGCM | Vista cuadro de adquisición ↔ pedido |
+| 13p | `db/00_ddl/V023__crear_cuadro_adquisicion.sql` | DBSIGCM | Outbox `CREAR_CUADRO_ADQUISICION` |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
@@ -52,6 +51,8 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 19 | `db/10_api/F006__acceso_sesion.sql` | DBSIGCM | Acceso y armado de la sesión |
 | 19b | `db/10_api/F007__cmn_anexo4.sql` | DBSIGCM | Anexo 4: generar, obtener, anular |
 | 19c | `db/10_api/F008__requerimiento_locacion.sql` | DBSIGCM | Locación: filtros, CCP, O/S, sobre de correo |
+| 19d | `db/10_api/F008__sso_padron_derivacion.sql` | DBSIGCM | Sincronización del padrón SSO y destinatarios de derivación |
+| 19e | `db/10_api/F009__panel_sso.sql` | DBSIGCM | Panel de accesos y perfiles (solo lectura, `ADMIN_SISTEMA`) |
 | 20 | `db/15_siga/W001__escritor_cuadro_modificado.sql` | DBSIGCM | Escritor SIGA (CMN) |
 | 20b | `db/15_siga/W002__escritor_orden_servicio.sql` | DBSIGCM | Escritor SIGA (orden de servicio) |
 | 20c | `db/15_siga/W003__escritor_cuadro_adquisicion.sql` | DBSIGCM | Escritor SIGA (cuadro de adquisición + copia TDR) |
@@ -60,7 +61,12 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 23 | `db/20_seed/S002__plazos_directiva.sql` | DBSIGCM | Plazos de la Directiva |
 | 24 | `db/20_seed/S003__requerimiento_estados.sql` | DBSIGCM | Configuración de Requerimiento (AU + OA/DEC) |
 | 25 | `db/20_seed/S004__requerimiento_locacion_post_au.sql` | DBSIGCM | Filtros, CCP, cuadro, orden de servicio y plazos de la ERF |
+| 25b | `db/20_seed/S005__requerimiento_filtros_jerarquia.sql` | DBSIGCM | Jerarquía filtros: especialista → coordinador → jefe → OPP |
+| 25c | `db/20_seed/S005__sso_perfil_derivacion.sql` | DBSIGCM | Mapeo `cod_perfil`→rol y aristas del árbol de derivación |
+| 25d | `db/20_seed/S006__cmn_derivacion_directa.sql` | DBSIGCM | Las dos transiciones del salto directo jefe→especialista en CMN |
+| 25e | `db/20_seed/S006__opp_oa_solo_jefe.sql` | DBSIGCM | CCP solo OPP; OA/OPP sin jerarquía interna |
 | 26 | `db/20_seed/S007__ccp_carga_dec.sql` | DBSIGCM | Carga de CCP por DEC |
+| 27 | `db/20_seed/S007__panel_sso_administrador.sql` | DBSIGCM | Módulo `ADMIN_SSO`, su permiso, el mapeo `P0001` y el administrador |
 
 Pendiente: indagación competitiva (Anexo 8) para bienes y servicios. La locación por invitación directa no la usa.
 
@@ -79,6 +85,7 @@ aplica ordenados por nombre, así que agregar uno nuevo no obliga a tocar
 | `S904__casos_anexo4_multiple.sql` | Deja 4 Anexos 3 en borrador, uno por área usuaria real, para recorrer el flujo a mano desde la pantalla | no | sí, esa es la idea |
 | `S905__limpiar_expedientes_cmn.sql` | **Borra** todos los expedientes CMN de DBSIGCM y reinicia el correlativo. Exige `-v confirmar="SI"` | no | sí: deja la base sin expedientes |
 | `S906__prueba_edicion_cmn.sql` | Corregir y anular un Anexo 3: quién puede, desde qué estado, y que no duplique el expediente | no | no, se limpia sola |
+| `S907__prueba_sso_derivacion.sql` | Padrón del SSO y árbol de derivación, 15 comprobaciones: alta, **baja**, re-alta, los dos flujos (CMN sin coordinador de área usuaria, Requerimiento con él) y la derivación a persona validada por `F004`. Padrón sintético, no necesita red al SSO | no | no, corre dentro de una transacción y termina en `ROLLBACK` |
 
 `S903` es la que conviene correr después de tocar el flujo: no toca SIGA, se
 limpia al terminar y es repetible. Comprueba la firma en cadena, la regla del

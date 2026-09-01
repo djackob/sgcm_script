@@ -38,6 +38,12 @@
   Si no pasas -Servidor, el instalador prueba 127.0.0.1, localhost y
   localhost\SQLSERVER25 y se queda con la instancia que tenga SIGA_1750.
 
+  Si el sqlcmd de la maquina es version 18 o superior, hace falta -Confiar para
+  aceptar el certificado autofirmado del servidor. Para no tener que averiguarlo
+  a mano, usa desa.ps1, que lo detecta solo:
+
+      .\desa.ps1
+
   NOTA SOBRE C002
   ---------------
   C002__acceso_lectura_siga.sql NO forma parte de esta serie. Concede permisos
@@ -66,7 +72,8 @@ param(
     [switch]$Recrear,
     [switch]$ConDatosPrueba,
     [switch]$SoloVerificar,
-    [switch]$OmitirSigaExt
+    [switch]$OmitirSigaExt,
+    [switch]$Confiar
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,11 +120,23 @@ $prohibidas = @(
 # C000B contiene esas construcciones a proposito: son sus pruebas de capacidad.
 $exentos = @("C000B__diagnostico_motor.sql")
 
+# Carpetas con SQL de OTRO motor. La premisa de la regla es "esto corre en SQL
+# Server 2022"; un script de PostgreSQL no corre ahi, y ademas usa legitimamente
+# construcciones que aqui estan prohibidas -el tipo json, sin ir mas lejos, que
+# es lo que devuelve la propia funcion del SSO-. Revisarlos seria comparar contra
+# una linea base que no es la suya.
+$carpetasExentas = @("sso")
+
 function Verificar-Fuentes {
     Titulo "1. Verificacion del codigo fuente (linea base SQL Server 2022)"
 
     $archivos = Get-ChildItem -Path $raiz -Filter "*.sql" -Recurse |
-                Where-Object { $exentos -notcontains $_.Name }
+                Where-Object { $exentos -notcontains $_.Name } |
+                Where-Object {
+                    $relativa = $_.FullName.Substring($raiz.Length + 1)
+                    $primera  = ($relativa -split '[\\/]')[0]
+                    $carpetasExentas -notcontains $primera
+                }
 
     $hallazgos = 0
     foreach ($archivo in $archivos) {
@@ -160,6 +179,11 @@ function Ejecutar([string]$ruta, [string]$baseDestino, [string[]]$variables) {
     #    la bitacora se vuelve ilegible.
     $argumentos = @("-S", $Servidor, "-d", $baseDestino, "-b", "-I", "-W", "-s", "|", "-i", $ruta)
     if ($Usuario -ne "") { $argumentos += @("-U", $Usuario) } else { $argumentos += "-E" }
+    # -C acepta el certificado del servidor sin validar la cadena. Hace falta con
+    # sqlcmd 18 o superior, que cifra por defecto: contra un servidor con
+    # certificado autofirmado -como el de desarrollo- si no se pasa, la conexion
+    # ni siquiera se abre. En sqlcmd 11 la opcion no existe.
+    if ($Confiar) { $argumentos += "-C" }
     foreach ($v in $variables) { $argumentos += @("-v", $v) }
 
     $salida = & sqlcmd $argumentos 2>&1 | Out-String
