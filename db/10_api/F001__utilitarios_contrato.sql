@@ -161,18 +161,59 @@ BEGIN
         CorrelacionId varchar(50)  '$.CorrelacionId'
     );
 
-    IF NULLIF(LTRIM(RTRIM(@Usuario)), '') IS NULL
+    SET @Usuario = NULLIF(LTRIM(RTRIM(@Usuario)), '');
+    SET @Rol     = NULLIF(LTRIM(RTRIM(@Rol)), '');
+    SET @Unidad  = NULLIF(LTRIM(RTRIM(@Unidad)), '');
+
+    IF @Usuario IS NULL
         THROW 51001, 'VALIDACION_ACTOR: falta Actor.Usuario. El backend debe completarlo desde la sesion SSO.', 1;
-    IF NULLIF(LTRIM(RTRIM(@Rol)), '') IS NULL
+
+    /* El token del SSO institucional trae cod_perfil (PE092) y a menudo no
+       trae cod_dependencia. Sin esta traduccion, la primera accion del
+       especialista real revienta en VALIDACION_ACTOR aunque el padron ya
+       tenga su terna. */
+    IF @Rol IS NOT NULL
+       AND OBJECT_ID(N'sigcm.PerfilSso', N'U') IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM sigcm.Rol WHERE CodigoRol = @Rol AND Activo = 1)
+    BEGIN
+        SELECT @Rol = NULLIF(LTRIM(RTRIM(m.CodigoRol)), '')
+          FROM sigcm.PerfilSso AS m
+         WHERE m.CodigoPerfilSso = @Rol AND m.Activo = 1;
+    END
+
+    IF @Rol IS NULL
         THROW 51002, 'VALIDACION_ACTOR: falta Actor.Rol.', 1;
-    IF NULLIF(LTRIM(RTRIM(@Unidad)), '') IS NULL
+
+    DECLARE @Hoy date = CONVERT(date, GETDATE());
+
+    IF @Unidad IS NULL
+    BEGIN
+        IF (SELECT COUNT(*)
+              FROM sigcm.UsuarioRol AS ur
+              JOIN sigcm.Usuario    AS u  ON u.IdUsuario = ur.IdUsuario
+              JOIN sigcm.Unidad     AS un ON un.IdUnidad = ur.IdUnidad
+             WHERE u.Cuenta = @Usuario AND ur.CodigoRol = @Rol
+               AND u.Activo = 1 AND un.Activo = 1 AND ur.Activo = 1
+               AND ur.VigenteDesde <= @Hoy
+               AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= @Hoy)) = 1
+        BEGIN
+            SELECT @Unidad = un.Codigo
+              FROM sigcm.UsuarioRol AS ur
+              JOIN sigcm.Usuario    AS u  ON u.IdUsuario = ur.IdUsuario
+              JOIN sigcm.Unidad     AS un ON un.IdUnidad = ur.IdUnidad
+             WHERE u.Cuenta = @Usuario AND ur.CodigoRol = @Rol
+               AND u.Activo = 1 AND un.Activo = 1 AND ur.Activo = 1
+               AND ur.VigenteDesde <= @Hoy
+               AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= @Hoy);
+        END
+    END
+
+    IF @Unidad IS NULL
         THROW 51003, 'VALIDACION_ACTOR: falta Actor.Unidad.', 1;
 
     /* Una correlacion invalida no debe tumbar la operacion: se genera una. */
     SET @CorrelacionId = TRY_CONVERT(uniqueidentifier, @CorrelacionTexto);
     IF @CorrelacionId IS NULL SET @CorrelacionId = NEWID();
-
-    DECLARE @Hoy date = CONVERT(date, GETDATE());
 
     SELECT
         @IdUsuario      = u.IdUsuario,
@@ -188,7 +229,7 @@ BEGIN
     JOIN sigcm.Unidad     AS un ON un.IdUnidad = ur.IdUnidad
     WHERE u.Cuenta      = @Usuario
       AND ur.CodigoRol  = @Rol
-      AND un.Codigo     = @Unidad
+      AND (un.Codigo = @Unidad OR un.CentroCostoSiga = @Unidad)
       AND u.Activo      = 1
       AND un.Activo     = 1
       AND ur.Activo     = 1
@@ -264,26 +305,32 @@ GO
 /* ========================================================================== */
 
 /*
-  Genera el codigo visible de un expediente: PREFIJO-ANIO-000123.
+  Genera el codigo visible de un expediente.
 
-  El contador vive en sigcm.Correlativo (V010), no en una SEQUENCE. La razon
-  esta explicada a fondo en V010; en una linea: una secuencia entrega el numero
-  FUERA de la transaccion, asi que un rollback deja un hueco en la numeracion, y
-  el codigo de expediente es el numero con el que un auditor lo pide.
+  Formato de expediente (CMN / REQ), con area, usuario y correlativo del actor:
+      PREFIJO-ANIO-{area}{idUsuario}{correlativo}
+      CMN-2026-01070503125001
+        2026       anio de ejecucion
+        01070503   digitos del centro de costo (01.07.05.03)
+        125        IdUsuarioSso del actor, con al menos tres cifras
+        001        correlativo de expedientes de ESE usuario en ESE area y anio
 
-  @Secuencia conserva el nombre y el formato que ya usaban las rutinas que
-  llaman aqui (N'cmn.SeqSolicitud'): hoy es la clave de la fila del contador, no
-  el nombre de un objeto. Se mantiene asi para no tocar las llamadas.
+  El contador vive en sigcm.Correlativo (V010), no en una SEQUENCE: el numero se
+  consume DENTRO de la transaccion del llamador, asi un rollback no deja huecos.
 
-  El UPDLOCK/HOLDLOCK al comprobar la existencia evita que dos registros
-  simultaneos inserten la misma fila; la asignacion encadenada del UPDATE lee y
-  escribe en una sola operacion, sin ventana entre ambas.
+  Sin @AreaNumerica / @IdUsuarioNumerico se conserva el formato corto
+  PREFIJO-ANIO-000123 (paquetes Anexo 4 y llamadas antiguas).
+
+  @Secuencia es la clave del contador. Con area y usuario se concatena
+  |anio|area|idUsuario para que cada actor tenga su propia serie.
 */
 CREATE OR ALTER PROCEDURE sigcm.paSiguienteCodigo
-    @Prefijo   varchar(10),
-    @AnoEje    smallint,
-    @Secuencia nvarchar(128),          /* p.ej. N'cmn.SeqSolicitud' */
-    @Codigo    varchar(40) OUTPUT
+    @Prefijo           varchar(10),
+    @AnoEje            smallint,
+    @Secuencia         nvarchar(128),          /* p.ej. N'cmn.SeqSolicitud' */
+    @Codigo            varchar(40) OUTPUT,
+    @AreaNumerica      varchar(20) = NULL,
+    @IdUsuarioNumerico int         = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -291,20 +338,46 @@ BEGIN
     IF NULLIF(LTRIM(RTRIM(@Secuencia)), '') IS NULL
         THROW 51010, 'No se indico el nombre del correlativo.', 1;
 
+    DECLARE @Nombre nvarchar(128) = @Secuencia;
+    DECLARE @ConActor bit = 0;
+    DECLARE @Area varchar(20) = NULLIF(LTRIM(RTRIM(@AreaNumerica)), '');
+    DECLARE @UsuarioTxt varchar(20);
+
+    IF @Area IS NOT NULL AND @IdUsuarioNumerico IS NOT NULL AND @IdUsuarioNumerico > 0
+    BEGIN
+        SET @ConActor = 1;
+        SET @UsuarioTxt = CONVERT(varchar(20), @IdUsuarioNumerico);
+        IF LEN(@UsuarioTxt) < 3
+            SET @UsuarioTxt = RIGHT(CONCAT('000', @UsuarioTxt), 3);
+        SET @Nombre = CONCAT(@Secuencia, N'|', CONVERT(varchar(4), @AnoEje), N'|',
+                             @Area, N'|', CONVERT(varchar(20), @IdUsuarioNumerico));
+    END
+
     DECLARE @Valor bigint;
 
-    /* Sin transaccion propia: se toma la del llamador, que es justamente lo que
-       hace que el numero se devuelva si el registro se deshace. */
     IF NOT EXISTS (SELECT 1 FROM sigcm.Correlativo WITH (UPDLOCK, HOLDLOCK)
-                    WHERE Nombre = @Secuencia)
-        INSERT INTO sigcm.Correlativo (Nombre, Valor) VALUES (@Secuencia, 0);
+                    WHERE Nombre = @Nombre)
+        INSERT INTO sigcm.Correlativo (Nombre, Valor) VALUES (@Nombre, 0);
 
     UPDATE sigcm.Correlativo
        SET @Valor = Valor = Valor + 1
-     WHERE Nombre = @Secuencia;
+     WHERE Nombre = @Nombre;
 
-    SET @Codigo = CONCAT(@Prefijo, '-', CONVERT(varchar(4), @AnoEje), '-',
-                         RIGHT(CONCAT('000000', CONVERT(varchar(20), @Valor)), 6));
+    IF @ConActor = 1
+    BEGIN
+        DECLARE @Corr varchar(20) = CONVERT(varchar(20), @Valor);
+        IF @Valor < 1000
+            SET @Corr = RIGHT(CONCAT('000', @Corr), 3);
+
+        SET @Codigo = CONCAT(@Prefijo, '-', CONVERT(varchar(4), @AnoEje), '-',
+                             @Area, @UsuarioTxt, @Corr);
+    END
+    ELSE
+        SET @Codigo = CONCAT(@Prefijo, '-', CONVERT(varchar(4), @AnoEje), '-',
+                             RIGHT(CONCAT('000000', CONVERT(varchar(20), @Valor)), 6));
+
+    IF LEN(@Codigo) > 40
+        THROW 51011, 'CONFLICTO_CONFIGURACION: el codigo de expediente excede 40 caracteres.', 1;
 END
 GO
 
@@ -356,7 +429,9 @@ BEGIN
                 @SecFunc     int,
                 @Origen      varchar(1),
                 @FuenteFinanc varchar(2),
-                @NumeroPedido varchar(6);
+                @NumeroPedido varchar(6),
+                @CodigoTipoContratacion varchar(20),
+                @TipoBien    char(1);
 
         SELECT @Maestro     = Maestro,
                @AnoEje      = AnoEje,
@@ -368,7 +443,9 @@ BEGIN
                @SecFunc     = SecFunc,
                @Origen      = Origen,
                @FuenteFinanc = FuenteFinanc,
-               @NumeroPedido = NumeroPedido
+               @NumeroPedido = NumeroPedido,
+               @CodigoTipoContratacion = CodigoTipoContratacion,
+               @TipoBien    = TipoBien
         FROM OPENJSON(@parametro)
         WITH (
             Maestro     varchar(40),
@@ -381,7 +458,9 @@ BEGIN
             SecFunc     int,
             Origen      varchar(1),
             FuenteFinanc varchar(2),
-            NumeroPedido varchar(6)
+            NumeroPedido varchar(6),
+            CodigoTipoContratacion varchar(20),
+            TipoBien    char(1)
         );
 
         IF NULLIF(LTRIM(RTRIM(@Maestro)), '') IS NULL
@@ -596,15 +675,18 @@ BEGIN
         BEGIN
             /* REQ-02: el combo lista los pedidos SIGA del AREA USUARIA del
                actor, no de cualquier centro. CentroCostoSiga sale de la unidad
-               de la sesion (igual que paRegistrarRequerimiento). TipoPedido 1
-               es el pedido de area usuaria; el 2 es de almacen.
+               de la sesion (igual que paRegistrarRequerimiento).
+
+               TIPO_BIEN: S = servicios (locacion, servicio, consultoria);
+               B = bienes / compras. En esta ejecutora los pedidos de servicio
+               del area usuaria son TipoBien S y TipoPedido 2; TipoPedido 1
+               es el pedido de compras (bienes). TipoPedido 2 + B es almacen.
 
                PEDIDO_DETALLE une en una sola respuesta lo que el sistema
                anterior pedia en dos HTTP al elegir un N°: la tarea del centro
                (listarCentroCostoTarea) y el resumen concatenado de items
-               (listarItemsPedidoResumen). Solo lineas de TipoPedido 1 del area
-               del actor: el API viejo mezclaba el pedido 1 y el 2 con el mismo
-               numero, y eso no corresponde al formulario del area usuaria. */
+               (listarItemsPedidoResumen). Solo lineas del tipo de bien del
+               objeto: locacion no mezcla compras. */
             DECLARE @IdUsuarioPed      uniqueidentifier,
                     @CuentaPed         varchar(120),
                     @NombrePed         varchar(250),
@@ -616,7 +698,8 @@ BEGIN
                     @IpPed             varchar(45),
                     @EquipoPed         varchar(50),
                     @ProgramaPed       varchar(50),
-                    @CorrPed           uniqueidentifier;
+                    @CorrPed           uniqueidentifier,
+                    @TipoPedidoPed     char(1);
 
             EXEC sigcm.paResolverActor
                 @parametro,
@@ -642,14 +725,22 @@ BEGIN
 
             SET @CentroCosto = LTRIM(RTRIM(@CentroCostoActor));
 
+            SET @TipoBien = CASE
+                WHEN @TipoBien IN ('B', 'S') THEN @TipoBien
+                WHEN @CodigoTipoContratacion = 'BIEN' THEN 'B'
+                ELSE 'S'
+            END;
+            SET @TipoPedidoPed = CASE WHEN @TipoBien = 'S' THEN '2' ELSE '1' END;
+
             IF @Maestro = 'PEDIDO'
                 SET @Datos = (SELECT TOP (@Limite) NumeroPedido, MotivoPedido, AnoEje,
-                                     TipoPedido, ActProy, FuenteFinanc, CodigoTarea,
+                                     TipoBien, TipoPedido, ActProy, FuenteFinanc, CodigoTarea,
                                      SecFunc, FechaPedido, Origen, CentroCosto, Programa
                                 FROM siga.vwPedido
                                WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
                                  AND CentroCosto = @CentroCosto
-                                 AND TipoPedido = '1'
+                                 AND TipoPedido = @TipoPedidoPed
+                                 AND TipoBien = @TipoBien
                                ORDER BY NumeroPedido
                                  FOR JSON PATH);
             ELSE
@@ -662,6 +753,7 @@ BEGIN
                     SELECT TOP (1)
                            p.NumeroPedido,
                            p.AnoEje,
+                           p.TipoBien,
                            p.CodigoTarea,
                            p.ActProy,
                            p.Origen,
@@ -692,10 +784,12 @@ BEGIN
                                AND x.SecEjec      = p.SecEjec
                                AND x.TipoPedido   = p.TipoPedido
                                AND x.NumeroPedido = p.NumeroPedido
+                               AND x.TipoBien     = p.TipoBien
                       ) AS i
                      WHERE p.AnoEje = @AnoEje AND p.SecEjec = @SecEjec
                        AND p.CentroCosto = @CentroCosto
-                       AND p.TipoPedido = '1'
+                       AND p.TipoPedido = @TipoPedidoPed
+                       AND p.TipoBien = @TipoBien
                        AND p.NumeroPedido = @NumeroPedido
                        FOR JSON PATH);
             END

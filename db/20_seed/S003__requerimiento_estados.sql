@@ -13,11 +13,9 @@
   ---------------------------------------------------------------------------
   LA RAMA QUE JUSTIFICA LA MITAD DE LAS TRANSICIONES
   ---------------------------------------------------------------------------
-  REQ-14: si la DEC es Abastecimiento, el expediente pasa por OA; si es DAI, va
-  directo. Son dos caminos que vuelven a juntarse en la revision de la DEC, y
-  por eso REQ_REMITIR_OA y REQ_REMITIR_DAI salen del mismo estado de origen. La
-  rutina de negocio elige cual ofrecer leyendo Requerimiento.CodigoDec; el motor
-  solo comprueba que el rol tenga permiso.
+  REQ-14: al firmar, el jefe del Area usuaria remite directo a OA (el jefe de
+  la Oficina de Administracion). REQ_REMITIR_OA y REQ_REMITIR_DAI quedan
+  declaradas e inactivas: ya no hay un paso extra tras la firma.
 
   Alcance sembrado: del registro a la revision de la DEC (REQ-12 a REQ-16) mas
   el circuito interno del Area usuaria (Coordinador V.B. y firma del Jefe) y el
@@ -169,11 +167,11 @@ INSERT INTO @Tr VALUES
   /* El documento requerido depende del objeto (REQ-07) y por eso va nulo aqui:
      la rutina de negocio comprueba que exista el que corresponde al tipo de
      contratacion. Cablear uno solo obligaria a una transicion por objeto.
-     El Especialista envia a firmar: llega al Coordinador AU. El Coordinador
-     deriva al Jefe. El Jefe conserva REQ_DERIVAR_JEFE por si la unidad no
-     tiene Coordinador. */
+     Firma especialista: llega al Coordinador AU. El Coordinador deriva al
+     Jefe. El Jefe conserva REQ_DERIVAR_JEFE por si la unidad no tiene
+     Coordinador. */
   ('REQ_DERIVAR_COORD', 'REQ_DOC_PENDIENTE', 'REQ_PEND_VB_AU',
-   'Firmar anexos', 0, 1, NULL, 0, NULL, 0),
+   'Firma especialista', 0, 1, NULL, 0, NULL, 0),
 
   ('REQ_OTORGAR_VB', 'REQ_PEND_VB_AU', 'REQ_PEND_FIRMA_AU',
    'Derivar al Jefe del Area usuaria', 0, 0, NULL, 0, NULL, 0),
@@ -182,9 +180,10 @@ INSERT INTO @Tr VALUES
    'Derivar al Jefe para firma', 0, 0, NULL, 0, NULL, 0),
 
   ('REQ_FIRMAR_AU', 'REQ_PEND_FIRMA_AU', 'REQ_EN_EVAL_OA',
-   'Firmar el documento tecnico', 0, 1, NULL, 0, NULL, 0),
+   'Firmar y remitir a la Oficina de Administracion', 0, 1, NULL, 0, NULL, 0),
 
-  /* REQ-14, las dos rutas. */
+  /* Paso extra tras la firma: inactivo. La firma del jefe ya deja el
+     expediente en OA. Se conservan los codigos por trazabilidad. */
   ('REQ_REMITIR_OA', 'REQ_FIRMADO_AU', 'REQ_EN_EVAL_OA',
    'Remitir a la Oficina de Administracion', 0, 0, NULL, 0, NULL, 0),
 
@@ -256,7 +255,7 @@ SELECT s.CodigoTransicion, 'REQUERIMIENTO', s.CodigoEstadoOrigen, s.CodigoEstado
   FROM @Tr AS s
  WHERE NOT EXISTS (SELECT 1 FROM sigcm.Transicion AS d WHERE d.CodigoTransicion = s.CodigoTransicion);
 
-UPDATE sigcm.Transicion SET Activo = 0 WHERE CodigoTransicion = 'REQ_REMITIR_DAI';
+UPDATE sigcm.Transicion SET Activo = 0 WHERE CodigoTransicion IN ('REQ_REMITIR_DAI', 'REQ_REMITIR_OA');
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -270,7 +269,6 @@ INSERT INTO @TrRol VALUES
   ('REQ_OTORGAR_VB','AREA_COORDINADOR'),
   ('REQ_DERIVAR_JEFE','AREA_JEFE'),
   ('REQ_FIRMAR_AU','AREA_JEFE'),
-  ('REQ_REMITIR_OA','AREA_JEFE'),
   ('REQ_OBSERVAR_OA','OA'),
   ('REQ_DERIVAR_DEC','OA'),
   ('REQ_ABAST_JEFE_DERIVAR','ABAST_JEFE'),
@@ -300,7 +298,7 @@ DELETE FROM sigcm.TransicionRol
  WHERE CodigoTransicion = 'REQ_DERIVAR_JEFE' AND CodigoRol = 'AREA_ESPECIALISTA';
 
 DELETE FROM sigcm.TransicionRol
- WHERE CodigoTransicion = 'REQ_REMITIR_DAI';
+ WHERE CodigoTransicion IN ('REQ_REMITIR_DAI', 'REQ_REMITIR_OA');
 GO
 
 /* -------------------------------------------------------------------------- */

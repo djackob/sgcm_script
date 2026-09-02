@@ -314,19 +314,16 @@ SELECT s.CodigoTipoDocumento, 'CMN', s.Nombre, s.NumeracionVisible, s.AdmiteCons
    estan todas las de esta tabla. Recien con eso las siete filas de abajo
    significan algo.
 
-   Anexo 3: lo firma el jefe del area usuaria y despues lo refrendan los tres
-   escalones de Abastecimiento. Anexo 4: lo arma y firma el especialista, y lo
-   refrendan coordinador y jefe. */
+   Anexo 3: lo firma el jefe del area usuaria y despues lo refrendan
+   especialista y jefe de Abastecimiento. Anexo 4: lo arma el especialista y lo
+   firma unicamente el jefe de Abastecimiento. */
 DECLARE @DocFirma TABLE (CodigoTipoDocumento varchar(60), CodigoRol varchar(40), OrdenFirma smallint);
 INSERT INTO @DocFirma VALUES
   ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'AREA_JEFE',          1),
   ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_ESPECIALISTA', 2),
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_COORDINADOR',  3),
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_JEFE',         4),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_JEFE',         3),
 
-  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_ESPECIALISTA', 1),
-  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_COORDINADOR',  2),
-  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE',         3);
+  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE',         1);
 
 UPDATE d SET d.OrdenFirma = s.OrdenFirma
   FROM sigcm.TipoDocumentoFirma AS d
@@ -388,11 +385,8 @@ INSERT INTO @Tr VALUES
   ('CMN_GENERAR_A3', 'CMN_BORRADOR', 'CMN_PEND_FIRMA_A3',
    'Generar Anexo 3', 0, 0, NULL, 0, NULL, 0, NULL),
 
-  ('CMN_FIRMAR_A3', 'CMN_PEND_FIRMA_A3', 'CMN_A3_FIRMADO',
-   'Firmar Anexo 3', 0, 1, 'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
-
-  ('CMN_ENVIAR_OA', 'CMN_A3_FIRMADO', 'CMN_EN_EVAL_OA',
-   'Enviar Anexo 3 a la Oficina de Administracion', 0, 0,
+  ('CMN_FIRMAR_A3', 'CMN_PEND_FIRMA_A3', 'CMN_EN_EVAL_OA',
+   'Firmar Anexo 3 y remitir a la Oficina de Administracion', 0, 1,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
 
   /* ---------------------------------------------------------------------- */
@@ -429,13 +423,9 @@ INSERT INTO @Tr VALUES
   ('CMN_ABAST_ESP_OBSERVAR', 'CMN_EN_ABAST_ESP', 'CMN_OBS_ABAST_COORD',
    'Observar el Anexo 3', 1, 0, NULL, 0, NULL, 1, NULL),
 
-  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_FIRMA_COORD',
-   'Conformar y firmar el Anexo 3', 0, 1,
-   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
-
-  ('CMN_ABAST_COORD_FIRMAR_A3', 'CMN_A3_FIRMA_COORD', 'CMN_A3_FIRMA_JEFE',
+  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_FIRMA_JEFE',
    'Firmar el Anexo 3 y elevar al Jefe', 0, 1,
-   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_COORDINADOR'),
+   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
 
   /* PRIMER MOMENTO DE ESCRITURA EN SIGA.
      La firma del jefe cierra el Anexo 3 y recien ahi los items entran a
@@ -500,13 +490,9 @@ INSERT INTO @Tr VALUES
      expedientes del paquete a la vez —F004 acepta IdExpedientes— porque un
      Anexo 4 a medio armar, con unos expedientes movidos y otros no, no es un
      estado recuperable. */
-  ('CMN_GENERAR_A4', 'CMN_A3_APROBADO', 'CMN_A4_FIRMA_COORD',
-   'Generar y firmar el Anexo 4', 0, 1,
-   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
-
-  ('CMN_ABAST_COORD_FIRMAR_A4', 'CMN_A4_FIRMA_COORD', 'CMN_A4_FIRMA_JEFE',
-   'Firmar el Anexo 4 y elevar al Jefe', 0, 1,
-   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, 'ABAST_COORDINADOR'),
+  ('CMN_GENERAR_A4', 'CMN_A3_APROBADO', 'CMN_A4_FIRMA_JEFE',
+   'Generar Anexo 4 y remitir al Jefe', 0, 0,
+   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, NULL),
 
   /* SEGUNDO MOMENTO DE ESCRITURA EN SIGA.
      Aqui se aprueban las solicitudes: MOTIVO_SOLICITUD pasa a '0' y el item
@@ -523,7 +509,7 @@ INSERT INTO @Tr VALUES
    'CMN_ANEXO_4_APROBACION_MODIFICACION', 1, 'CONSOLIDAR_CMN', 0, 'ABAST_JEFE'),
 
   /* Unica transicion sin RolFirmaRequerida entre las que exigen documento: al
-     recepcionar, el Anexo 4 ya debe tener sus tres firmas. */
+     recepcionar, el Anexo 4 ya debe estar firmado por el jefe de Abastecimiento. */
   ('CMN_RECEPCIONAR_A4', 'CMN_A4_ENVIADO', 'CMN_FINALIZADO',
    'Recepcionar Anexo 4', 0, 0,
    'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, NULL),
@@ -588,7 +574,6 @@ INSERT INTO @TrRol VALUES
   ('CMN_GENERAR_A3','AREA_ESPECIALISTA'), ('CMN_GENERAR_A3','AREA_COORDINADOR'),
   ('CMN_GENERAR_A3','AREA_JEFE'),
   ('CMN_FIRMAR_A3','AREA_JEFE'),
-  ('CMN_ENVIAR_OA','AREA_JEFE'),
 
   /* Oficina de Administracion */
   ('CMN_OA_DERIVAR','OA'),
@@ -602,7 +587,6 @@ INSERT INTO @TrRol VALUES
   ('CMN_ABAST_COORD_DERIVAR','ABAST_COORDINADOR'),
   ('CMN_ABAST_ESP_OBSERVAR','ABAST_ESPECIALISTA'),
   ('CMN_ABAST_ESP_FIRMAR_A3','ABAST_ESPECIALISTA'),
-  ('CMN_ABAST_COORD_FIRMAR_A3','ABAST_COORDINADOR'),
   ('CMN_ABAST_JEFE_FIRMAR_A3','ABAST_JEFE'),
 
   /* Devolucion de observaciones */
@@ -618,7 +602,6 @@ INSERT INTO @TrRol VALUES
 
   /* Anexo 4 */
   ('CMN_GENERAR_A4','ABAST_ESPECIALISTA'),
-  ('CMN_ABAST_COORD_FIRMAR_A4','ABAST_COORDINADOR'),
   ('CMN_ABAST_JEFE_FIRMAR_A4','ABAST_JEFE'),
   ('CMN_RECEPCIONAR_A4','AREA_JEFE'),
 

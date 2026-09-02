@@ -595,8 +595,9 @@ GO
   contra el SSO y no revela a nadie mas.
 
   Existe porque el frontend consume detalle[0].perfil[0]: una sesion lleva UNA
-  terna. Quien ejerce dos -hoy la coordinadora que atiende UDS y
-  Abastecimiento- tiene que elegir con cual entra, igual que en /acceso-local.
+  terna. Quien ejerce dos roles de area usuaria (o ninguno y varios de
+  Abastecimiento) tiene que elegir. Si solo hay UNA terna AREA_*, el ingreso
+  SSO entra directo con esa -igual que el jefe de OTI- y no abre el selector.
 */
 CREATE OR ALTER PROCEDURE sigcm.paListarPerfilSso
     @parametro nvarchar(max)
@@ -630,7 +631,15 @@ BEGIN
                    Sigla          = n.Sigla,
                    CentroCosto    = n.CentroCostoSiga,
                    EsAreaUsuaria  = n.EsAreaUsuaria,
-                   EsTitular      = ur.EsTitular
+                   EsTitular      = ur.EsTitular,
+                   Modulos = JSON_QUERY(COALESCE((
+                       SELECT m.CodigoModulo, m.Nombre, m.Ruta
+                         FROM sigcm.RolModulo AS rm
+                         JOIN sigcm.Modulo    AS m ON m.CodigoModulo = rm.CodigoModulo
+                        WHERE rm.CodigoRol = ur.CodigoRol
+                          AND rm.Activo = 1 AND m.Activo = 1
+                        ORDER BY m.Orden
+                          FOR JSON PATH), '[]'))
               FROM sigcm.UsuarioRol AS ur
               JOIN sigcm.Usuario    AS u ON u.IdUsuario = ur.IdUsuario
               JOIN sigcm.Unidad     AS n ON n.IdUnidad  = ur.IdUnidad

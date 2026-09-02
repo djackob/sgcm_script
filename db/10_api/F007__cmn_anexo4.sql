@@ -160,6 +160,46 @@ BEGIN
 
         IF @YaEnPaquete IS NOT NULL
         BEGIN
+            /* Reintento: el PDF ya se reservo y el movimiento fallo (p.ej. porque
+               se exigia una firma que el especialista no pone). Si la seleccion
+               es exactamente ese paquete y sigue en CMN_A3_APROBADO, se devuelve
+               el mismo Anexo 4 para que el cliente vuelva a registrar y mover. */
+            DECLARE @IdPaqueteReintento uniqueidentifier;
+            DECLARE @PaquetesSel int;
+
+            SELECT @PaquetesSel = COUNT(DISTINCT p.IdPaquete)
+              FROM @Sel AS x
+              JOIN cmn.PaqueteSolicitud AS ps ON ps.IdSolicitud = x.IdSolicitud AND ps.Activo = 1
+              JOIN cmn.Paquete         AS p  ON p.IdPaquete = ps.IdPaquete AND p.Anulado = 0;
+
+            IF @PaquetesSel = 1
+               AND NOT EXISTS (
+                    SELECT 1 FROM @Sel AS x
+                     WHERE NOT EXISTS (
+                        SELECT 1 FROM cmn.PaqueteSolicitud AS ps
+                         WHERE ps.IdSolicitud = x.IdSolicitud AND ps.Activo = 1))
+            BEGIN
+                SELECT TOP 1 @IdPaqueteReintento = p.IdPaquete
+                  FROM @Sel AS x
+                  JOIN cmn.PaqueteSolicitud AS ps ON ps.IdSolicitud = x.IdSolicitud AND ps.Activo = 1
+                  JOIN cmn.Paquete         AS p  ON p.IdPaquete = ps.IdPaquete AND p.Anulado = 0;
+
+                IF NOT EXISTS (
+                        SELECT 1 FROM cmn.PaqueteSolicitud AS ps
+                         WHERE ps.IdPaquete = @IdPaqueteReintento AND ps.Activo = 1
+                           AND NOT EXISTS (SELECT 1 FROM @Sel AS x WHERE x.IdSolicitud = ps.IdSolicitud))
+                    AND NOT EXISTS (
+                        SELECT 1 FROM cmn.PaqueteSolicitud AS ps
+                        JOIN cmn.Solicitud    AS s ON s.IdSolicitud = ps.IdSolicitud
+                        JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
+                         WHERE ps.IdPaquete = @IdPaqueteReintento AND ps.Activo = 1
+                           AND e.CodigoEstado <> 'CMN_A3_APROBADO')
+                BEGIN
+                    EXEC cmn.paObtenerAnexo4Interno @IdPaquete = @IdPaqueteReintento;
+                    RETURN;
+                END
+            END
+
             DECLARE @errPaq nvarchar(500) = CONCAT(
                 'CONFLICTO_PAQUETE: ', @YaEnPaquete, '. Un Anexo 3 solo puede integrar un Anexo 4.');
             THROW 51704, @errPaq, 1;

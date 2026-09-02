@@ -12,7 +12,7 @@
     2. El JEFE del area tambien puede corregirlo, aunque el turno del estado sea
        del especialista.
     3. Un perfil de Abastecimiento NO puede corregirlo.
-    4. Una vez firmado el Anexo 3 ya no se puede corregir.
+    4. Enviado al jefe (CMN_PEND_FIRMA_A3) ya no se puede corregir.
     5. Un expediente devuelto observado vuelve a ser corregible, en los tres
        escalones del area usuaria por los que pasa.
     6. La anulacion del borrador esta disponible para el area usuaria.
@@ -254,23 +254,23 @@ IF JSON_VALUE(@j,'$.estado') <> '1'
 BEGIN PRINT ' FALLO CMN_GENERAR_A3: ' + @j; EXEC #LimpiarS906; RETURN; END
 SET @Version = CONVERT(int, JSON_VALUE(@j,'$.Version'));
 
-/* En CMN_PEND_FIRMA_A3 todavia se corrige: el jefe encontro el error al ir a
-   firmar y no tiene por que devolverlo. */
+/* En CMN_PEND_FIRMA_A3 ya no se corrige: el Anexo 3 se envio al jefe. */
 SET @p = N'{' + @ActorJefe + N',
   "Solicitud": { "IdSolicitud": "' + @IdSolicitud + N'",
                  "AnoEje": ' + CONVERT(varchar(4), @AnoEje) + N', "SecEjec": ' + CONVERT(varchar(10), @SecEjec) + N',
                  "CentroCosto": "' + @CentroCosto + N'", "TipoOperacion": "MODIFICACION",
-                 "Sustento": "S906: corregido antes de firmar.", "TipoInclusion": "ORDINARIA" },
+                 "Sustento": "S906: intento con el jefe, ya enviado.", "TipoInclusion": "ORDINARIA" },
   "Items": [' + REPLACE(@Item, '@CANT@', '310') + N']}';
-DELETE FROM @r; INSERT INTO @r EXEC cmn.paRegistrarSolicitud @p;
-SELECT @j = j FROM @r;
-IF JSON_VALUE(@j,'$.estado') <> '1'
+EXEC cmn.paRegistrarSolicitud @p;
+
+SELECT @sustentoActual = Sustento FROM cmn.Solicitud WHERE IdSolicitud = TRY_CONVERT(uniqueidentifier, @IdSolicitud);
+IF @sustentoActual <> 'S906: corregido por el jefe.'
 BEGIN
-    PRINT '  [FALLA] No se pudo corregir en CMN_PEND_FIRMA_A3: ' + @j;
+    PRINT '  [FALLA] Se pudo corregir un Anexo 3 ya enviado al jefe.';
     SET @fallas = @fallas + 1;
 END
 ELSE
-    PRINT '  OK - Generado el Anexo 3 y pendiente de firma, todavia se corrige.';
+    PRINT '  OK - Enviado al jefe, la correccion se rechaza.';
 
 /* Registrar y firmar el documento, para llegar a CMN_A3_FIRMADO. */
 SET @p = N'{' + @ActorJefe + N',"IdExpediente":"' + @IdExpediente + N'",
@@ -305,7 +305,7 @@ SET @p = N'{' + @ActorJefe + N',
 EXEC cmn.paRegistrarSolicitud @p;
 
 SELECT @sustentoActual = Sustento FROM cmn.Solicitud WHERE IdSolicitud = TRY_CONVERT(uniqueidentifier, @IdSolicitud);
-IF @sustentoActual <> 'S906: corregido antes de firmar.'
+IF @sustentoActual <> 'S906: corregido por el jefe.'
 BEGIN
     PRINT '  [FALLA] Se pudo corregir un Anexo 3 ya firmado.';
     SET @fallas = @fallas + 1;
@@ -319,7 +319,6 @@ ELSE
 
 DECLARE @Paso TABLE (o int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), comentario nvarchar(200));
 INSERT INTO @Paso (actor, codigo, comentario) VALUES
-    (@ActorJefe, 'CMN_ENVIAR_OA',   NULL),
     (N'"Actor":{"Usuario":"prueba.oa","Rol":"OA","Unidad":"UO-OA","Equipo":"S906","Programa":"S906"}',
      'CMN_OA_OBSERVAR', N'S906: observacion de prueba.');
 

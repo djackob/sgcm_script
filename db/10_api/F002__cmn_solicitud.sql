@@ -143,15 +143,13 @@ GO
 
   QUE ESTADOS Y POR QUE
     CMN_BORRADOR        aun no se genero el documento
-    CMN_PEND_FIRMA_A3   generado, pendiente de la firma del jefe
     CMN_OBS_AU_JEFE     volvio observado y esta con el jefe
     CMN_OBS_AU_COORD    el jefe lo derivo al coordinador
     CMN_OBSERVADO       el coordinador lo derivo al especialista para subsanar
 
-  CMN_A3_FIRMADO queda fuera a proposito: ahi el jefe ya firmo, y corregir el
-  contenido despues de la firma es rehacer el documento, no editarlo. Los
-  CMN_SUBS_* tambien: en ellos el area ya declaro subsanado y el expediente va
-  de salida hacia Abastecimiento.
+  CMN_PEND_FIRMA_A3 queda fuera: el Anexo 3 ya se envio al jefe del area y no
+  se corrige. CMN_A3_FIRMADO (historico) y los CMN_SUBS_* tambien: alli el area
+  ya declaro el contenido y el expediente va de salida.
 */
 CREATE OR ALTER FUNCTION cmn.fnPuedeEditar
 (
@@ -167,11 +165,37 @@ BEGIN
     IF @CodigoRol NOT IN ('AREA_ESPECIALISTA','AREA_COORDINADOR','AREA_JEFE')
         RETURN 0;
 
-    IF @CodigoEstado NOT IN ('CMN_BORRADOR','CMN_PEND_FIRMA_A3',
+    IF @CodigoEstado NOT IN ('CMN_BORRADOR',
                              'CMN_OBS_AU_JEFE','CMN_OBS_AU_COORD','CMN_OBSERVADO')
         RETURN 0;
 
     RETURN 1;
+END
+GO
+
+/* Nombre del jefe titular del area usuaria de origen: es quien firma el Anexo 3,
+   no el especialista que lo registro. */
+CREATE OR ALTER FUNCTION cmn.fnNombreJefeArea
+(
+    @IdUnidad uniqueidentifier
+)
+RETURNS varchar(250)
+AS
+BEGIN
+    DECLARE @Nombre varchar(250);
+
+    SELECT TOP (1) @Nombre = CONCAT_WS(' ', uj.Nombres, uj.Apellidos)
+      FROM sigcm.UsuarioRol AS urj
+      JOIN sigcm.Usuario    AS uj ON uj.IdUsuario = urj.IdUsuario
+     WHERE urj.IdUnidad = @IdUnidad
+       AND urj.CodigoRol = 'AREA_JEFE'
+       AND urj.Activo = 1
+       AND urj.VigenteHasta IS NULL
+       AND uj.Activo = 1
+     ORDER BY CASE WHEN uj.IdUsuarioSso IS NOT NULL THEN 0 ELSE 1 END,
+              urj.EsTitular DESC, uj.Apellidos, uj.Nombres;
+
+    RETURN @Nombre;
 END
 GO
 
@@ -280,7 +304,7 @@ BEGIN
                 DECLARE @errEdit nvarchar(400) = CONCAT(
                     'NO_AUTORIZADO: ', @CodigoEdit, ' no puede corregirse por este perfil en el estado ',
                     @CodigoEstadoEdit,
-                    '. Solo el area usuaria que lo tiene, y mientras el Anexo 3 no este firmado o haya vuelto observado.');
+                    '. Solo el area usuaria que lo tiene, en borrador o cuando volvio observado. Una vez enviado al jefe ya no se edita.');
                 THROW 51128, @errEdit, 1;
             END
         END
@@ -681,7 +705,19 @@ BEGIN
            numero con que el expediente ya circula: es el que un auditor pide y
            el que figura impreso en el Anexo 3 que ya se genero. */
         IF @EsCorreccion = 0
-            EXEC sigcm.paSiguienteCodigo 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT;
+        BEGIN
+            DECLARE @AreaNumerica varchar(20) =
+                REPLACE(REPLACE(LTRIM(RTRIM(@CentroCosto)), '.', ''), ' ', '');
+            DECLARE @IdUsuarioNumerico int;
+            SELECT @IdUsuarioNumerico = IdUsuarioSso
+              FROM sigcm.Usuario WHERE IdUsuario = @IdUsuario;
+            IF @IdUsuarioNumerico IS NULL OR @IdUsuarioNumerico <= 0
+                SET @IdUsuarioNumerico = (ABS(CHECKSUM(CONVERT(varchar(36), @IdUsuario))) % 900) + 100;
+
+            EXEC sigcm.paSiguienteCodigo
+                 'CMN', @AnoEje, N'cmn.SeqSolicitud', @Codigo OUTPUT,
+                 @AreaNumerica, @IdUsuarioNumerico;
+        END
         ELSE
         BEGIN
             SET @Codigo       = @CodigoEdit;
@@ -918,6 +954,7 @@ BEGIN
                        e.CodigoEstado, @CodigoRol,
                        CASE WHEN e.IdUnidadActual = @IdUnidad THEN 1 ELSE 0 END),
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
+                   JefeAreaUsuaria = cmn.fnNombreJefeArea(e.IdUnidadOrigen),
                    CentroCostoNombre = cc.NombreDepend,
                    /* El PDF que vive en el file server, para firmarlo y para
                       volver a verlo. Sin esto la pantalla solo conoce el archivo
