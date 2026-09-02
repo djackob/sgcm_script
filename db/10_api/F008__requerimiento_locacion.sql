@@ -1025,6 +1025,18 @@ BEGIN
         IF JSON_VALUE(@parametro, '$.Version') IS NULL
             SET @parametro = JSON_MODIFY(@parametro, '$.Version', @Version);
 
+        BEGIN TRY
+            IF OBJECT_ID(N'pago.paAbrirDesdeOrdenServicioInterno', N'P') IS NOT NULL
+            BEGIN
+                DECLARE @pPago nvarchar(max) = @parametro;
+                SET @pPago = JSON_MODIFY(@pPago, '$.IdRequerimiento', CONVERT(nvarchar(36), @IdRequerimiento));
+                EXEC pago.paAbrirDesdeOrdenServicioInterno @pPago;
+            END
+        END TRY
+        BEGIN CATCH
+            /* Hito 1 no bloquea la notificacion de la O/S. */
+        END CATCH
+
         EXEC sigcm.paEjecutarTransicion @parametro;
         RETURN;
     END TRY

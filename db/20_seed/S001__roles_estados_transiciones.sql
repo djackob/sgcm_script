@@ -63,7 +63,7 @@ INSERT INTO @Modulo VALUES
   ('CMN',           'Gestion CMN',                  10, 1, 'gestion-cmn', 'mdi mdi-clipboard-list-outline'),
   ('REQUERIMIENTO', 'Requerimiento a Notificacion', 20, 1, 'gestion-requerimiento', 'mdi mdi-clipboard-text-outline'),
   ('EJECUCION',     'Ejecucion',                    30, 0, NULL,          'mdi mdi-progress-check'),
-  ('PAGO',          'Pago',                         40, 0, NULL,          'mdi mdi-cash-multiple'),
+  ('PAGO',          'Entregables y pagos',          40, 1, 'gestion-pago', 'mdi mdi-cash-multiple'),
   ('MODIFICACION',  'Modificacion-Ampliacion',      50, 0, NULL,          'mdi mdi-file-document-edit-outline'),
   ('RESOLUCION',    'Resolucion',                   60, 0, NULL,          'mdi mdi-file-cancel-outline');
 
