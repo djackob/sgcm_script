@@ -32,6 +32,9 @@ DELETE FROM sigcm.TransicionRol
    AND CodigoRol = 'OPP';
 GO
 
+/* Mismo candado que en S004: REQ_REGISTRAR_CCP no la define ninguna semilla,
+   asi que sin el EXISTS esta linea corta la instalacion con un 547 en toda base
+   que no arrastre la fila de antes. */
 INSERT INTO sigcm.TransicionRol (CodigoTransicion, CodigoRol)
 SELECT v.CodigoTransicion, v.CodigoRol
   FROM (VALUES
@@ -42,7 +45,10 @@ SELECT v.CodigoTransicion, v.CodigoRol
  WHERE NOT EXISTS (
        SELECT 1 FROM sigcm.TransicionRol AS d
         WHERE d.CodigoTransicion = v.CodigoTransicion
-          AND d.CodigoRol = v.CodigoRol);
+          AND d.CodigoRol = v.CodigoRol)
+   AND EXISTS (
+       SELECT 1 FROM sigcm.Transicion AS t
+        WHERE t.CodigoTransicion = v.CodigoTransicion);
 GO
 
 DECLARE @TipoDoc TABLE (CodigoTipoDocumento varchar(60), Nombre varchar(200),

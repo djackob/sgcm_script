@@ -1,6 +1,9 @@
-# SIGCM — Empieza por aquí
+# SIGCM — Mapa del repositorio
 
-Mapa del repositorio y **prompt de arranque** para una ventana de contexto nueva.
+> **El documento de entrada es [`INIT.md`](INIT.md).** Ahí están las reglas que
+> no se negocian, el estado de cada módulo, los defectos abiertos y cómo levantar
+> el ambiente. Empieza por ese; éste desarrolla el mapa del repositorio y el
+> prompt de arranque.
 
 ---
 
@@ -197,6 +200,63 @@ tu visto bueno.
    pendiente.
 5. **Todo cambio de flujo termina con su script de prueba** en `db/90_pruebas/`.
    Si no toca SIGA, que se limpie solo y sea repetible, como `S903`.
+6. **Tocar el backend obliga a matar el proceso y volver a levantarlo.** Ver
+   abajo; es la regla que más tiempo ha costado por no estar escrita.
+
+---
+
+## 4bis. Al tocar el backend: matar el proceso y relevantarlo
+
+`anin_scm` sirve desde `bin/Debug/net8.0/`, así que **el código nuevo no existe
+hasta que se recompila, y no se recompila mientras el proceso esté vivo**:
+MSBuild no puede sobrescribir un DLL en uso y termina con `MSB3021` /
+`MSB3027`. Lo peligroso es que eso *no* se parece a un error de compilación —
+sale «Compilación correcta» en los proyectos y sólo falla el copiado— así que es
+fácil dar por desplegado algo que sigue corriendo con el binario viejo.
+
+El síntoma es siempre el mismo y despista mucho: **el endpoint nuevo responde
+404**. Como 404 es también lo que devuelve una ruta mal escrita, se pierde el
+tiempo revisando el `[HttpGet]`, el nombre del método y la URL del front, cuando
+lo único que pasa es que ese código no está en el proceso que atiende.
+
+Pasó el 2026-09-02: `ConsultaRucSunat` y `ListarDepartamento` daban 404 contra
+`https://localhost:7182`. Los dos estaban en el repo —uno recién escrito, el otro
+traído en el merge de `jack3`—, pero el proceso llevaba levantado desde el 28 de
+agosto. Al reiniciarlo, ambos pasaron a **401**, que es lo correcto sin sesión.
+
+```bash
+# 1. Matar el proceso (deja libres los DLL)
+powershell -NoProfile -Command "Stop-Process -Name anin_scm -Force -ErrorAction SilentlyContinue"
+```
+
+```bash
+# 2. Recompilar. Sin el paso 1 esto termina en MSB3021 y el binario no cambia.
+dotnet build ../sgcm_back/anin_scm.sln --nologo
+```
+
+```bash
+# 3. Levantar de nuevo en https://localhost:7182 (perfil "https")
+dotnet run --project ../sgcm_back/anin.scm --launch-profile https --no-build
+```
+
+**Cómo comprobar que de verdad se relevantó**, en vez de suponerlo: un endpoint
+que existe y pide sesión responde **401**; una ruta inexistente responde **404**.
+Si lo nuevo sigue en 404, el proceso viejo sigue arriba.
+
+```bash
+curl -k -s -o /dev/null -w '%{http_code}\n' https://localhost:7182/api/General/ListarDepartamento
+```
+
+Comprobar además la fecha del binario contra la hora de arranque del proceso;
+si el DLL es más nuevo que el proceso, lo que está sirviendo es código viejo:
+
+```bash
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='anin_scm.exe'\" | Select-Object ProcessId,CreationDate; (Get-Item 'D:\SGCM_SIGA\proyectos\sgcm_back\anin.scm\bin\Debug\net8.0\anin_scm.dll').LastWriteTime"
+```
+
+El frontend no tiene este problema con `ng serve`, que recompila solo. Sí lo
+tiene si se está sirviendo `dist/`: ahí hay que volver a construir con
+`ng build`.
 
 ---
 

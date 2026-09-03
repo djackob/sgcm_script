@@ -389,6 +389,40 @@ INSERT INTO @Tr VALUES
    'Firmar Anexo 3 y remitir a la Oficina de Administracion', 0, 1,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
 
+  /* La salida que le faltaba al jefe del area usuaria.
+     En CMN_PEND_FIRMA_A3 el jefe solo podia firmar o anular. Si al revisar
+     encontraba un error, anular era desproporcionado -mata el expediente y
+     obliga a registrarlo entero de nuevo- y firmar era enviar a la Oficina de
+     Administracion algo que ya sabia mal. Con esta transicion lo devuelve al
+     especialista.
+
+     El destino es CMN_BORRADOR y no un estado nuevo: cmn.fnPuedeEditar ya
+     admite ese estado para los tres roles del area usuaria, asi que el
+     especialista recupera la edicion sin tocar la funcion. Volver al borrador
+     tambien deja el expediente donde el flujo ya sabe seguir -CMN_GENERAR_A3
+     vuelve a estar disponible- y el Anexo 3 se regenera versionado sobre el
+     anterior, que es lo que hace registrarDocumento.
+
+     RequiereComentario=1: una devolucion sin motivo obliga al especialista a
+     adivinar que corregir. El motivo queda en sigcm.Historial.Comentario, que
+     es lo que la trazabilidad muestra.
+
+     GeneraObservacion=0, y es deliberado, aunque ya no por la razon
+     original. Cuando se escribio esto ninguna rutina cerraba una observacion
+     -nacian 'PENDIENTE' y ahi se quedaban-, asi que marcar esta devolucion
+     habria inmunizado al expediente contra toda observacion posterior de OA o
+     Abastecimiento, por el guard CONFLICTO_OBSERVACION de F004. Eso se
+     corrigio: V029 agrego sigcm.Transicion.AccionObservacion y S018 reparte
+     donde se recepciona, se subsana y se cierra.
+
+     La marca sigue en 0 por lo que siempre fue el fondo del asunto: esta es una
+     devolucion INTERNA del area usuaria -no sale de la unidad y no tiene estado
+     de retorno que valga-, y no hay ninguna transicion en la que cerrarla,
+     porque el expediente vuelve a CMN_BORRADOR y reinicia el circuito. El
+     comentario en sigcm.Historial basta. */
+  ('CMN_AU_JEFE_DEVOLVER', 'CMN_PEND_FIRMA_A3', 'CMN_BORRADOR',
+   'Devolver al Especialista para modificar', 1, 0, NULL, 0, NULL, 0, NULL),
+
   /* ---------------------------------------------------------------------- */
   /* Oficina de Administracion                                              */
   /* ---------------------------------------------------------------------- */
@@ -476,7 +510,16 @@ INSERT INTO @Tr VALUES
      firmas de la anterior. Mandar a Abastecimiento un documento cuya firma ya no
      corresponde al contenido es exactamente lo que el versionado existe para
      impedir. Si el especialista no cambio nada, la version sigue siendo la misma
-     y F003 reconoce la firma vigente sin pedir una nueva. */
+     y F003 reconoce la firma vigente sin pedir una nueva.
+
+     EL DESTINO DE ESTA FILA ES EL CASO POR DEFECTO, NO SIEMPRE EL REAL. Lo que
+     observa OA vuelve a OA: si la observacion abierta del expediente tiene
+     CodigoEstadoRetorno = 'CMN_EN_EVAL_OA', el subsanado regresa alli y no a
+     Abastecimiento. Eso depende del expediente y no de la transicion, asi que no
+     cabe en esta tabla: lo resuelve sigcm.fnEstadoDestinoTransicion (F001), a la
+     que llaman por igual las bandejas (F002, F005), la lista de acciones y el
+     motor (F004). Aqui queda el destino cuando no hay observacion abierta o
+     cuando quien observo fue Abastecimiento. */
   ('CMN_SUBS_JEFE_ENVIAR', 'CMN_SUBS_AU_JEFE', 'CMN_EN_ABAST_JEFE',
    'Firmar y remitir subsanado a Abastecimiento', 0, 1,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'AREA_JEFE'),
@@ -574,6 +617,7 @@ INSERT INTO @TrRol VALUES
   ('CMN_GENERAR_A3','AREA_ESPECIALISTA'), ('CMN_GENERAR_A3','AREA_COORDINADOR'),
   ('CMN_GENERAR_A3','AREA_JEFE'),
   ('CMN_FIRMAR_A3','AREA_JEFE'),
+  ('CMN_AU_JEFE_DEVOLVER','AREA_JEFE'),
 
   /* Oficina de Administracion */
   ('CMN_OA_DERIVAR','OA'),

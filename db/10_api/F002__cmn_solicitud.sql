@@ -1024,9 +1024,22 @@ GO
 /* ========================================================================== */
 
 /*
-  Bandeja del modulo.   El filtro por defecto es "mi bandeja": lo que esta en la
-  unidad del actor Y cuyo estado tiene como responsable el rol del actor. Asi el
-  especialista no ve lo que le toca firmar al jefe, ni al reves.
+  Bandeja del modulo. SoloMiBandeja=1 (el valor por defecto) acota a la UNIDAD
+  del actor: todo lo que esta en su oficina, le toque o no. Con 0 no acota nada.
+
+  ANTES ACOTABA TAMBIEN POR ROL, y ese era el problema. La pantalla ofrecia un
+  check "Solo mi bandeja" que al desmarcarse pasaba de "lo mio" a "todo el
+  sistema", dos extremos sin punto medio, y marcado escondia el resto del
+  trabajo de la propia oficina: el jefe no veia lo que su especialista tenia sin
+  atender hasta que le llegaba. La condicion por rol no desaparecio, se movio a
+  la columna MeToca y al ORDER BY: ahora lo pendiente para este perfil se marca
+  y sube al inicio, en vez de ser lo unico visible. Es el modelo de una bandeja
+  de correo, que fue lo que el negocio pidio, y por eso el check se retiro de la
+  pantalla.
+
+  La visibilidad no se amplio fuera de la unidad, y actuar sigue siendo cosa del
+  rol: Transiciones y PuedeEditar se calculan igual que antes, de modo que una
+  fila que no le corresponde a este perfil llega sin acciones.
 
   Cada fila trae Transiciones: las mismas que sigcm.paListarTransicionDisponible
   para ese expediente y este actor. La bandeja pinta los botones de accion con
@@ -1100,8 +1113,7 @@ BEGIN
           JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
           JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
          WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
-           AND (@SoloMiBandeja = 0
-                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
+           AND (@SoloMiBandeja = 0 OR e.IdUnidadActual = @IdUnidad)
            AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
            AND (@AnoEje       IS NULL OR s.AnoEje       = @AnoEje)
            AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
@@ -1119,6 +1131,25 @@ BEGIN
                               e.IdExpediente, e.CodigoEstado, e.Version,
                               Estado = w.Nombre,
                               RolResponsable = w.RolResponsable,
+                              /* Si la pelota esta en el tejado de ESTE actor.
+                                 Es la condicion que antes ocultaba filas cuando
+                                 SoloMiBandeja valia 1; ahora no filtra, marca.
+                                 La bandeja muestra todo lo que esta en la
+                                 unidad y ordena lo pendiente arriba, como los
+                                 no leidos de un correo: el jefe ve en que anda
+                                 su equipo sin perder de vista lo suyo. Lo que
+                                 se puede HACER sobre cada fila lo siguen
+                                 diciendo Transiciones y PuedeEditar, que se
+                                 calculan por rol; una fila que no es de este
+                                 perfil llega sin acciones. */
+                              /* CONVERT a bit y no un CASE con enteros: FOR JSON
+                                 serializa bit como true/false y int como 1/0, y
+                                 la fila ya trae PuedeEditar como booleano. */
+                              MeToca = CONVERT(bit, CASE
+                                  WHEN e.IdUnidadActual = @IdUnidad
+                                   AND w.RolResponsable = @CodigoRol THEN 1
+                                  ELSE 0
+                              END),
                               /* Si este actor puede corregir el contenido. La
                                  pantalla no lo deduce del estado: lo pregunta,
                                  igual que hace con las acciones del flujo. */
@@ -1158,29 +1189,21 @@ BEGIN
                                  que FOR JSON las escape como texto. */
                               Transiciones = JSON_QUERY(COALESCE((
                                   SELECT t.CodigoTransicion,
-                                         NombreAccion = CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado = 'CMN_EN_EVAL_OA'
-                                                 THEN N'Firmar y remitir subsanado a OA'
-                                             ELSE t.NombreAccion
-                                         END,
-                                         CodigoEstadoDestino = CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado IS NOT NULL
-                                                 THEN dest.CodigoEstado
-                                             ELSE t.CodigoEstadoDestino
-                                         END,
+                                         /* Nombre y destino los da
+                                            sigcm.fnEstadoDestinoTransicion (F001),
+                                            la misma que aplica el motor al
+                                            ejecutar: la fila anuncia lo que va a
+                                            pasar de verdad. */
+                                         dest.NombreAccion,
+                                         dest.CodigoEstadoDestino,
                                          EstadoDestino = d.Nombre,
                                          t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
                                          t.EncolaIntegracion, t.GeneraObservacion
                                     FROM sigcm.Transicion AS t
-                                    JOIN sigcm.Estado AS d ON d.CodigoEstado =
-                                         CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado IS NOT NULL
-                                                 THEN dest.CodigoEstado
-                                             ELSE t.CodigoEstadoDestino
-                                         END
+                                   CROSS APPLY sigcm.fnEstadoDestinoTransicion(
+                                                   e.IdExpediente, t.CodigoTransicion,
+                                                   t.CodigoEstadoDestino, t.NombreAccion) AS dest
+                                    JOIN sigcm.Estado AS d ON d.CodigoEstado = dest.CodigoEstadoDestino
                                    WHERE t.CodigoModulo = e.CodigoModulo
                                      AND t.CodigoEstadoOrigen = e.CodigoEstado
                                      AND t.Activo = 1
@@ -1202,31 +1225,24 @@ BEGIN
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_3_SOLICITUD_MODIFICACION') AS a3
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_SUSTENTO_URGENCIA') AS su
-                         OUTER APPLY (
-                             SELECT TOP 1 o.CodigoEstadoRetorno
-                               FROM sigcm.Observacion AS o
-                              WHERE o.IdExpediente = e.IdExpediente AND o.Activo = 1
-                                AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
-                              ORDER BY o.FechaCreacionAuditoria DESC
-                         ) AS obs
-                         OUTER APPLY (
-                             SELECT CASE
-                                        WHEN obs.CodigoEstadoRetorno = 'CMN_EN_EVAL_OA'
-                                            THEN 'CMN_EN_EVAL_OA'
-                                        WHEN obs.CodigoEstadoRetorno LIKE 'CMN_EN_ABAST%'
-                                            THEN 'CMN_EN_ABAST_JEFE'
-                                        ELSE NULL
-                                    END AS CodigoEstado
-                         ) AS dest
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
-                          AND (@SoloMiBandeja = 0
-                               OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
+                          AND (@SoloMiBandeja = 0 OR e.IdUnidadActual = @IdUnidad)
                           AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
                           AND (@AnoEje       IS NULL OR s.AnoEje       = @AnoEje)
                           AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
                           AND (@Texto        IS NULL OR s.Codigo LIKE '%' + @Texto + '%'
                                                      OR s.Sustento LIKE '%' + @Texto + '%')
-                        ORDER BY ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
+                        /* Primero lo que le toca a este perfil, y dentro de cada
+                           grupo lo mas reciente. El orden es del servidor y no
+                           del navegador porque la bandeja pagina: ordenar en el
+                           cliente solo reacomodaria la pagina que ya llego y
+                           dejaria lo pendiente escondido en la pagina 3. */
+                        ORDER BY CASE
+                                     WHEN e.IdUnidadActual = @IdUnidad
+                                      AND w.RolResponsable = @CodigoRol THEN 0
+                                     ELSE 1
+                                 END,
+                                 ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),
                    'OK' AS mensaje

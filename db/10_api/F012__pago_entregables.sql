@@ -125,8 +125,12 @@ BEGIN
             @CantEnt int = ISNULL(TRY_CONVERT(int, JSON_VALUE(@Prov, '$.CantidadEntregables')), 0),
             @MontoMensual decimal(18,2) = TRY_CONVERT(decimal(18,2), JSON_VALUE(@Prov, '$.MontoMensual'));
 
-    DECLARE @NombreLocador nvarchar(250) =
-        NULLIF(LTRIM(RTRIM(CONCAT(@Nombres, N' ', @ApPat, N' ', @ApMat))), N'');
+    /* La razon social manda cuando el proveedor se identifico por RUC: ahi los
+       tres campos de persona natural vienen vacios y el CONCAT dejaba el
+       expediente de pago sin nombre de locador. Mismo respaldo que en F011. */
+    DECLARE @NombreLocador nvarchar(250) = COALESCE(
+        NULLIF(LTRIM(RTRIM(JSON_VALUE(@Prov, '$.RazonSocial'))), N''),
+        NULLIF(LTRIM(RTRIM(CONCAT(@Nombres, N' ', @ApPat, N' ', @ApMat))), N''));
 
     DECLARE @Pedido varchar(20), @Clasificador varchar(20), @Meta varchar(20);
     SELECT TOP 1 @Pedido = p.NumeroPedido, @Clasificador = p.Clasificador, @Meta = p.SecFunc
@@ -414,7 +418,7 @@ BEGIN
                 )
              OR (@CodigoRol <> 'PROVEEDOR' AND (
                     @SoloMiBandeja = 0
-                 OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol)
+                 OR e.IdUnidadActual = @IdUnidad
                 ))
            );
 
@@ -426,6 +430,16 @@ BEGIN
                    Expedientes = JSON_QUERY(COALESCE((
                        SELECT p.IdExpedientePago, e.IdExpediente, e.Codigo, e.CodigoEstado, e.Version,
                               Estado = w.Nombre, RolResponsable = w.RolResponsable,
+                              /* Si la pelota esta en el tejado de ESTE actor. No
+                                 filtra, marca: la bandeja muestra todo lo de la
+                                 unidad y esto es lo que la pantalla pinta como
+                                 pendiente. CONVERT a bit para que FOR JSON lo
+                                 serialice como true/false y no como 1/0. */
+                              MeToca = CONVERT(bit, CASE
+                                  WHEN e.IdUnidadActual = @IdUnidad
+                                   AND w.RolResponsable = @CodigoRol THEN 1
+                                  ELSE 0
+                              END),
                               p.IdRequerimiento, p.CodigoRequerimiento, p.NumeroOrdenSiga,
                               p.NumeroEntregable, p.NombreEntregable, p.PlazoDias,
                               p.MontoEntregable, p.MontoContrato, p.FechaLimiteCronograma,
@@ -466,12 +480,26 @@ BEGIN
                                 OR p.RucLocador = @Cuenta OR p.DniLocador = @Cuenta
                                 OR (@CorreoActor IS NOT NULL AND p.CorreoLocador = @CorreoActor)
                                )
+                            /* SoloMiBandeja acota a la UNIDAD, no al rol. La
+                               condicion por rol no desaparecio: se movio a la
+                               columna MeToca y al ORDER BY, para que lo
+                               pendiente se marque y suba en vez de ser lo unico
+                               visible. Mismo criterio que en cmn.paListarSolicitud. */
                             OR (@CodigoRol <> 'PROVEEDOR' AND (
                                    @SoloMiBandeja = 0
-                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol)
+                                OR e.IdUnidadActual = @IdUnidad
                                ))
                           )
-                        ORDER BY e.FechaModificacionAuditoria DESC
+                        /* Primero lo que le toca a este perfil y dentro de cada
+                           grupo lo mas reciente. El orden es del servidor porque
+                           la bandeja pagina: ordenar en el cliente solo
+                           reacomodaria la pagina que ya llego. */
+                        ORDER BY CASE
+                                     WHEN e.IdUnidadActual = @IdUnidad
+                                      AND w.RolResponsable = @CodigoRol THEN 0
+                                     ELSE 1
+                                 END,
+                                 e.FechaModificacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

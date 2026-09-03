@@ -136,11 +136,27 @@ INSERT INTO @TrRol VALUES
   ('REQ_NOTIFICAR_OS','ABAST_ESPECIALISTA'),
   ('REQ_NOTIFICAR_OS','ABAST_COORDINADOR');
 
+/* El permiso solo se siembra si la transicion existe.
+
+   Sin este candado la semilla revienta con un 547 contra
+   FK_sigcm_TransicionRol_Transicion, y no por un dato malo sino por el ORDEN:
+   REQ_INICIAR_FILTROS la crea S016, que corre despues de S004 porque el
+   instalador ordena los archivos por nombre. En una base que ya venia con esas
+   filas de una instalacion anterior el problema no se ve; en una base al dia
+   con el repositorio, si.
+
+   Las filas que hoy se saltan no se pierden: S016 siembra sus propios permisos
+   para REQ_INICIAR_FILTROS y S007 los de REQ_REGISTRAR_CCP. Lo que queda fuera
+   -REQ_REGISTRAR_CCP y REQ_NOTIFICAR_OS- es porque NINGUNA semilla las define
+   todavia; ese hueco se arregla creando la transicion, no forzando el permiso
+   de una que no existe. */
 INSERT INTO sigcm.TransicionRol (CodigoTransicion, CodigoRol)
 SELECT s.CodigoTransicion, s.CodigoRol
   FROM @TrRol AS s
  WHERE NOT EXISTS (SELECT 1 FROM sigcm.TransicionRol AS d
-                    WHERE d.CodigoTransicion = s.CodigoTransicion AND d.CodigoRol = s.CodigoRol);
+                    WHERE d.CodigoTransicion = s.CodigoTransicion AND d.CodigoRol = s.CodigoRol)
+   AND EXISTS (SELECT 1 FROM sigcm.Transicion AS t
+                WHERE t.CodigoTransicion = s.CodigoTransicion);
 GO
 
 /* -------------------------------------------------------------------------- */

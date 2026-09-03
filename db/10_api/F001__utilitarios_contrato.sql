@@ -827,5 +827,85 @@ BEGIN
 END
 GO
 
+/* ========================================================================== */
+/* 6. sigcm.fnEstadoDestinoTransicion                                        */
+/* ========================================================================== */
+
+/*
+  EL DESTINO REAL DE UNA TRANSICION, EN UN SOLO SITIO.
+
+  Casi siempre es sigcm.Transicion.CodigoEstadoDestino y no hay nada que
+  calcular. La excepcion es el retorno de lo subsanado: la regla del flujo -y de
+  sigcm.Observacion.CodigoEstadoRetorno, ver V003- dice que lo que observa OA
+  vuelve a OA y lo que observa Abastecimiento vuelve a Abastecimiento. La fila
+  de la semilla no puede expresar eso, porque ahi el destino depende del
+  expediente y no de la transicion.
+
+  Esto vivia repetido en cmn.paObtenerSolicitud (F002) y en
+  requerimiento.paObtenerRequerimiento (F005) -que SI lo aplicaban- mientras el
+  motor, sigcm.paEjecutarTransicion, usaba el destino fijo de la tabla: la
+  pantalla anunciaba "vuelve a OA" y el expediente terminaba en Abastecimiento.
+  Aqui hay UNA definicion y todos la llaman: las dos bandejas, la lista de
+  acciones disponibles y el motor que ejecuta.
+
+  Se lee la observacion ABIERTA -PENDIENTE, RECEPCIONADA o SUBSANADA-, que en
+  CMN_SUBS_JEFE_ENVIAR todavia lo esta cuando esto se evalua: S018 le asigno
+  AccionObservacion='CERRAR' a esa misma transicion, asi que el motor tiene que
+  resolver el destino ANTES de cerrarla. Cerrada la observacion, este calculo ya
+  solo devuelve el destino de la tabla.
+
+  El retorno de Abastecimiento se normaliza al Jefe: la observacion guarda el
+  estado exacto en que estaba el expediente -especialista, coordinador o jefe-
+  pero lo subsanado reingresa por el Jefe de Abastecimiento, que es justo lo que
+  la semilla declara como destino fijo. Devolverlo al escritorio del
+  especialista que observo se saltaria la linea.
+
+  Sin observacion abierta, o con un retorno que no pertenece a ninguno de los
+  dos circuitos, manda la tabla. Es una funcion en linea con subconsulta escalar:
+  devuelve siempre exactamente una fila, tambien cuando no hay observacion.
+*/
+CREATE OR ALTER FUNCTION sigcm.fnEstadoDestinoTransicion
+(
+    @IdExpediente        uniqueidentifier,
+    @CodigoTransicion    varchar(70),
+    @CodigoEstadoDestino varchar(60),
+    @NombreAccion        varchar(180)
+)
+RETURNS TABLE
+AS
+RETURN
+    SELECT r.CodigoEstadoDestino,
+           /* La etiqueta del boton viaja con el destino y no aparte: son el
+              mismo hecho contado dos veces, y separarlas es como se llego a que
+              la pantalla dijera "a OA" y el motor mandara a Abastecimiento. */
+           NombreAccion = CASE
+                              WHEN @CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
+                                   AND r.CodigoEstadoDestino = 'CMN_EN_EVAL_OA'
+                                  THEN N'Firmar y remitir subsanado a OA'
+                              ELSE @NombreAccion
+                          END
+      FROM (
+          SELECT CodigoEstadoDestino =
+                     CASE
+                         WHEN @CodigoTransicion <> 'CMN_SUBS_JEFE_ENVIAR'
+                             THEN @CodigoEstadoDestino
+                         WHEN obs.CodigoEstadoRetorno = 'CMN_EN_EVAL_OA'
+                             THEN 'CMN_EN_EVAL_OA'
+                         WHEN obs.CodigoEstadoRetorno LIKE 'CMN_EN_ABAST%'
+                             THEN 'CMN_EN_ABAST_JEFE'
+                         ELSE @CodigoEstadoDestino
+                     END
+            FROM (
+                SELECT CodigoEstadoRetorno = (
+                           SELECT TOP 1 o.CodigoEstadoRetorno
+                             FROM sigcm.Observacion AS o
+                            WHERE o.IdExpediente = @IdExpediente
+                              AND o.Activo = 1
+                              AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
+                            ORDER BY o.FechaCreacionAuditoria DESC)
+            ) AS obs
+      ) AS r;
+GO
+
 PRINT 'F001 aplicada: utilitarios del contrato.';
 GO

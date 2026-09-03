@@ -873,29 +873,21 @@ BEGIN
                                  que FOR JSON las escape como texto. */
                               Transiciones = JSON_QUERY(COALESCE((
                                   SELECT t.CodigoTransicion,
-                                         NombreAccion = CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado = 'CMN_EN_EVAL_OA'
-                                                 THEN N'Firmar y remitir subsanado a OA'
-                                             ELSE t.NombreAccion
-                                         END,
-                                         CodigoEstadoDestino = CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado IS NOT NULL
-                                                 THEN dest.CodigoEstado
-                                             ELSE t.CodigoEstadoDestino
-                                         END,
+                                         /* Nombre y destino los da
+                                            sigcm.fnEstadoDestinoTransicion (F001),
+                                            la misma que aplica el motor al
+                                            ejecutar: la fila anuncia lo que va a
+                                            pasar de verdad. */
+                                         dest.NombreAccion,
+                                         dest.CodigoEstadoDestino,
                                          EstadoDestino = d.Nombre,
                                          t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
                                          t.EncolaIntegracion, t.GeneraObservacion
                                     FROM sigcm.Transicion AS t
-                                    JOIN sigcm.Estado AS d ON d.CodigoEstado =
-                                         CASE
-                                             WHEN t.CodigoTransicion = 'CMN_SUBS_JEFE_ENVIAR'
-                                                  AND dest.CodigoEstado IS NOT NULL
-                                                 THEN dest.CodigoEstado
-                                             ELSE t.CodigoEstadoDestino
-                                         END
+                                   CROSS APPLY sigcm.fnEstadoDestinoTransicion(
+                                                   e.IdExpediente, t.CodigoTransicion,
+                                                   t.CodigoEstadoDestino, t.NombreAccion) AS dest
+                                    JOIN sigcm.Estado AS d ON d.CodigoEstado = dest.CodigoEstadoDestino
                                    WHERE t.CodigoModulo = e.CodigoModulo
                                      AND t.CodigoEstadoOrigen = e.CodigoEstado
                                      AND t.Activo = 1
@@ -931,22 +923,6 @@ BEGIN
                                 END
                               ORDER BY d.FechaCreacionAuditoria DESC
                          ) AS doc
-                         OUTER APPLY (
-                             SELECT TOP 1 o.CodigoEstadoRetorno
-                               FROM sigcm.Observacion AS o
-                              WHERE o.IdExpediente = e.IdExpediente AND o.Activo = 1
-                                AND o.Estado IN ('PENDIENTE','RECEPCIONADA','SUBSANADA')
-                              ORDER BY o.FechaCreacionAuditoria DESC
-                         ) AS obs
-                         OUTER APPLY (
-                             SELECT CASE
-                                        WHEN obs.CodigoEstadoRetorno = 'CMN_EN_EVAL_OA'
-                                            THEN 'CMN_EN_EVAL_OA'
-                                        WHEN obs.CodigoEstadoRetorno LIKE 'CMN_EN_ABAST%'
-                                            THEN 'CMN_EN_ABAST_JEFE'
-                                        ELSE NULL
-                                    END AS CodigoEstado
-                         ) AS dest
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND r.Activo = 1
                           AND (@SoloMiBandeja = 0
                                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))

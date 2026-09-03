@@ -170,7 +170,12 @@ CREATE TABLE sigcm.Transicion (
        sigcm.Observacion.CodigoEstadoRetorno tomandolo del estado en que estaba el
        expediente al observarse. Asi se cumple la regla del mockup —lo que observa
        OA vuelve a OA, lo que observa Abastecimiento vuelve a Abastecimiento— sin
-       un condicional por unidad. */
+       un condicional por unidad.
+
+       Esta marca dice que transiciones ABREN la observacion. Cuales la hacen
+       avanzar y cual la cierra lo dice AccionObservacion, que agrega V029: sin
+       esa contraparte la observacion nacia y no moria nunca, y el expediente
+       quedaba inobservable para siempre. */
     GeneraObservacion    bit NOT NULL CONSTRAINT DF_sigcm_Transicion_Observa DEFAULT (0),
     Activo               bit NOT NULL CONSTRAINT DF_sigcm_Transicion_Activo DEFAULT (1),
     CONSTRAINT CK_sigcm_Transicion_Distinta CHECK (CodigoEstadoOrigen <> CodigoEstadoDestino),

@@ -72,15 +72,23 @@ BEGIN
         SET @Correo = NULLIF(LTRIM(RTRIM(COALESCE(
                 JSON_VALUE(@Datos, '$.Proveedores[0].Email'),
                 JSON_VALUE(@Datos, '$.Proveedor.Email')))), '');
-        SET @NombreLocador = NULLIF(LTRIM(RTRIM(CONCAT(
+        /* La razon social manda cuando el locador se identifico por RUC: en ese
+           caso los tres campos de persona natural vienen vacios y el CONCAT
+           producia una cadena de espacios, de modo que el correo salia dirigido
+           a "Estimado/a locador". Solo se lee el campo; ninguna regla cambia. */
+        SET @NombreLocador = COALESCE(
+            NULLIF(LTRIM(RTRIM(JSON_VALUE(@Datos, '$.Proveedores[0].RazonSocial'))), ''),
+            NULLIF(LTRIM(RTRIM(CONCAT(
                 JSON_VALUE(@Datos, '$.Proveedores[0].Nombres'), N' ',
                 JSON_VALUE(@Datos, '$.Proveedores[0].ApellidoPaterno'), N' ',
-                JSON_VALUE(@Datos, '$.Proveedores[0].ApellidoMaterno')))), '');
+                JSON_VALUE(@Datos, '$.Proveedores[0].ApellidoMaterno')))), ''));
         IF @NombreLocador IS NULL
-            SET @NombreLocador = NULLIF(LTRIM(RTRIM(CONCAT(
+            SET @NombreLocador = COALESCE(
+                NULLIF(LTRIM(RTRIM(JSON_VALUE(@Datos, '$.Proveedor.RazonSocial'))), ''),
+                NULLIF(LTRIM(RTRIM(CONCAT(
                     JSON_VALUE(@Datos, '$.Proveedor.Nombres'), N' ',
                     JSON_VALUE(@Datos, '$.Proveedor.ApellidoPaterno'), N' ',
-                    JSON_VALUE(@Datos, '$.Proveedor.ApellidoMaterno')))), '');
+                    JSON_VALUE(@Datos, '$.Proveedor.ApellidoMaterno')))), ''));
 
         IF @Correo IS NULL
             THROW 51875, 'VALIDACION_CORREO: el locador no tiene correo en el Anexo 5. Completelo antes de invitar.', 1;

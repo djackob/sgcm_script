@@ -20,6 +20,12 @@
   Lo unico especifico por modulo es la EXPANSION del encolado, en la seccion 2:
   traducir la marca de la transicion a operaciones concretas de integracion.Operacion.
 
+  El destino tampoco se escribe aqui. Casi siempre es el de la tabla, pero lo
+  subsanado vuelve a quien observo, y eso depende del expediente. Ese calculo
+  vive en sigcm.fnEstadoDestinoTransicion (F001) y lo llaman por igual el motor,
+  la lista de acciones de la seccion 1 y las bandejas de F002 y F005: una sola
+  definicion, para que el boton no anuncie un destino y la ejecucion haga otro.
+
   ---------------------------------------------------------------------------
   CONCURRENCIA OPTIMISTA
   ---------------------------------------------------------------------------
@@ -142,12 +148,21 @@ BEGIN
                    @CodigoEstado AS CodigoEstadoActual,
                    @Version      AS Version,
                    Transiciones = JSON_QUERY(COALESCE((
-                       SELECT t.CodigoTransicion, t.NombreAccion, t.CodigoEstadoDestino,
+                       SELECT t.CodigoTransicion,
+                              /* Nombre y destino salen de la funcion, no de la
+                                 tabla: lo subsanado vuelve a quien observo, y el
+                                 boton tiene que anunciar lo mismo que el motor
+                                 va a hacer al pulsarlo. */
+                              dest.NombreAccion,
+                              dest.CodigoEstadoDestino,
                               EstadoDestino = d.Nombre,
                               t.RequiereComentario, t.RequiereFirma, t.DocumentoRequerido,
                               t.EncolaIntegracion, t.GeneraObservacion
                          FROM sigcm.Transicion AS t
-                         JOIN sigcm.Estado     AS d ON d.CodigoEstado = t.CodigoEstadoDestino
+                        CROSS APPLY sigcm.fnEstadoDestinoTransicion(
+                                        @IdExpediente, t.CodigoTransicion,
+                                        t.CodigoEstadoDestino, t.NombreAccion) AS dest
+                         JOIN sigcm.Estado     AS d ON d.CodigoEstado = dest.CodigoEstadoDestino
                         WHERE t.CodigoModulo = @CodigoModulo
                           AND t.CodigoEstadoOrigen = @CodigoEstado
                           AND t.Activo = 1
@@ -340,7 +355,7 @@ BEGIN
                 @RequiereComentario bit, @RequiereFirma bit,
                 @DocumentoRequerido varchar(60), @EncolaIntegracion bit,
                 @OperacionIntegracion varchar(30), @GeneraObservacion bit,
-                @RolFirmaRequerida varchar(40);
+                @RolFirmaRequerida varchar(40), @AccionObservacion varchar(15);
 
         SELECT @EstadoDestino        = CodigoEstadoDestino,
                @NombreAccion         = NombreAccion,
@@ -350,7 +365,8 @@ BEGIN
                @EncolaIntegracion    = EncolaIntegracion,
                @OperacionIntegracion = OperacionIntegracion,
                @GeneraObservacion    = GeneraObservacion,
-               @RolFirmaRequerida    = RolFirmaRequerida
+               @RolFirmaRequerida    = RolFirmaRequerida,
+               @AccionObservacion    = AccionObservacion
           FROM sigcm.Transicion
          WHERE CodigoTransicion   = @CodigoTransicion
            AND CodigoModulo       = @CodigoModulo
@@ -363,6 +379,52 @@ BEGIN
                 'CONFLICTO_TRANSICION: "', @CodigoTransicion,
                 '" no es una transicion valida desde el estado ', @EstadoActual, '.');
             THROW 51215, @errTr, 1;
+        END
+
+        /* ---- Destino real --------------------------------------------- */
+        /*
+          El destino de la tabla es el punto de partida, no siempre la respuesta:
+          lo subsanado vuelve a quien observo (sigcm.fnEstadoDestinoTransicion,
+          F001). Se resuelve AQUI, antes de enrutar y antes de abrir la
+          transaccion, por dos razones:
+
+          - CMN_SUBS_JEFE_ENVIAR es tambien la transicion que CIERRA la
+            observacion (S018). Resolver el destino mas abajo, dentro del bucle
+            y despues del cierre, leeria una observacion ya CERRADA y el
+            expediente terminaria en el destino fijo: exactamente el defecto que
+            esto corrige, con la pantalla anunciando "vuelve a OA" y el motor
+            mandandolo a Abastecimiento.
+          - El rol destino, la unidad y la validacion de IdResponsableDestino se
+            calculan a partir del destino. Si se resolviera despues, se enrutaria
+            contra un estado que no es al que se va.
+
+          El lote tiene que resolver un unico destino, por el mismo motivo por el
+          que tiene que estar todo en el mismo estado: si no, una sola accion
+          significaria cosas distintas para cada expediente y no habria una
+          transicion que ejecutar.
+        */
+        DECLARE @EstadoDestinoTabla varchar(60) = @EstadoDestino;
+
+        SELECT TOP 1 @EstadoDestino = dest.CodigoEstadoDestino,
+                     @NombreAccion  = dest.NombreAccion
+          FROM @Lote AS l
+         CROSS APPLY sigcm.fnEstadoDestinoTransicion(
+                         l.IdExpediente, @CodigoTransicion,
+                         @EstadoDestinoTabla, @NombreAccion) AS dest
+         ORDER BY l.Orden;
+
+        IF EXISTS (SELECT 1
+                     FROM @Lote AS l
+                    CROSS APPLY sigcm.fnEstadoDestinoTransicion(
+                                    l.IdExpediente, @CodigoTransicion,
+                                    @EstadoDestinoTabla, @NombreAccion) AS dest
+                    WHERE dest.CodigoEstadoDestino <> @EstadoDestino)
+        BEGIN
+            DECLARE @errDestLote nvarchar(500) = CONCAT(
+                'CONFLICTO_LOTE: los expedientes seleccionados no vuelven todos al mismo destino. ',
+                'Lo observado por la Oficina de Administracion y lo observado por Abastecimiento ',
+                'regresan por caminos distintos: envielos por separado.');
+            THROW 51224, @errDestLote, 1;
         END
 
         /* El rol se comprueba contra la tabla, no contra una lista en codigo. */
@@ -567,7 +629,8 @@ BEGIN
                 @VersionExp int, @VersionNuevaExp int,
                 @UnidadOrigenExp uniqueidentifier, @UnidadActualExp uniqueidentifier,
                 @IdUnidadDestinoExp uniqueidentifier, @CodigoExpLoop varchar(40),
-                @VersionNueva int = @VersionActual + 1;
+                @VersionNueva int = @VersionActual + 1,
+                @IdObsAfectada uniqueidentifier;
 
         WHILE @Idx <= @CantidadLote
         BEGIN
@@ -674,6 +737,90 @@ BEGIN
                      @Cuenta, @Ahora, @Equipo, @Programa);
 
                 SELECT @IdObservacion = IdObservacion FROM @Obs;
+            END
+
+            /* ---- Avance y cierre de la observacion --------------------- */
+            /*
+              La contraparte de GeneraObservacion. Aquella marca dice que
+              transiciones ABREN una observacion; AccionObservacion (V029) dice
+              cuales la hacen avanzar y hasta donde, y el reparto concreto vive
+              en la semilla S018. El motor sigue sin saber que existe CMN.
+
+              Sin esto la observacion nacia PENDIENTE y se quedaba asi para
+              siempre, y como el guard de CONFLICTO_OBSERVACION de mas arriba
+              mira justamente PENDIENTE y RECEPCIONADA, un expediente observado
+              una vez no podia volver a observarse nunca.
+
+              Se toma la observacion abierta mas reciente del expediente. Solo
+              puede haber una -lo garantiza UQ_sigcm_Observacion_Abierta- pero
+              el TOP 1 con orden explicito evita depender de eso para los datos
+              anteriores a esta correccion.
+
+              Si no hay ninguna en el estado que la accion espera, no se hace
+              nada y la transicion sigue: un expediente que llego a CMN_OBSERVADO
+              por un camino antiguo no tiene por que ver abortado su tramite.
+            */
+            IF @AccionObservacion IS NOT NULL
+            BEGIN
+                SET @IdObsAfectada =
+                    (SELECT TOP 1 o.IdObservacion
+                       FROM sigcm.Observacion AS o
+                      WHERE o.IdExpediente = @IdExpLoop
+                        AND o.Activo = 1
+                        AND ((@AccionObservacion = 'RECEPCIONAR' AND o.Estado = 'PENDIENTE')
+                          OR (@AccionObservacion = 'SUBSANAR'    AND o.Estado IN ('PENDIENTE','RECEPCIONADA'))
+                          OR (@AccionObservacion = 'CERRAR'      AND o.Estado <> 'CERRADA'))
+                      ORDER BY o.FechaCreacionAuditoria DESC);
+
+                IF @IdObsAfectada IS NOT NULL
+                BEGIN
+                    /*
+                      Los COALESCE cubren los flujos que no tienen un escalon
+                      para cada paso. En Requerimiento, REQ_SUBSANAR va de
+                      REQ_OBSERVADO directo a REQ_BORRADOR y CIERRA: nadie
+                      recepciono ni subsano por separado, y sin rellenar esas
+                      marcas la fila violaria CK_sigcm_Observacion_Recepcion,
+                      que exige RecepcionadaEn para cualquier estado distinto de
+                      PENDIENTE. En CMN ya vienen puestas por los pasos previos y
+                      el COALESCE las respeta: la recepcion conserva a quien
+                      recepciono de verdad.
+
+                      Respuesta se llena con el comentario de la transicion que
+                      subsana, que es donde el flujo lo exige
+                      (RequiereComentario=1 en CMN_SUBSANAR y en REQ_SUBSANAR).
+                    */
+                    UPDATE sigcm.Observacion
+                       SET Estado = CASE @AccionObservacion
+                                        WHEN 'RECEPCIONAR' THEN 'RECEPCIONADA'
+                                        WHEN 'SUBSANAR'    THEN 'SUBSANADA'
+                                        ELSE                    'CERRADA'
+                                    END,
+                           IdRecepcionadaPor = COALESCE(IdRecepcionadaPor, @IdUsuario),
+                           RecepcionadaEn    = COALESCE(RecepcionadaEn,    @Ahora),
+                           IdSubsanadaPor    = CASE WHEN @AccionObservacion = 'RECEPCIONAR'
+                                                    THEN IdSubsanadaPor
+                                                    ELSE COALESCE(IdSubsanadaPor, @IdUsuario) END,
+                           SubsanadaEn       = CASE WHEN @AccionObservacion = 'RECEPCIONAR'
+                                                    THEN SubsanadaEn
+                                                    ELSE COALESCE(SubsanadaEn, @Ahora) END,
+                           Respuesta         = CASE WHEN @AccionObservacion = 'RECEPCIONAR'
+                                                    THEN Respuesta
+                                                    ELSE COALESCE(Respuesta,
+                                                                  NULLIF(LTRIM(RTRIM(@Comentario)), '')) END,
+                           CerradaEn         = CASE WHEN @AccionObservacion = 'CERRAR'
+                                                    THEN COALESCE(CerradaEn, @Ahora)
+                                                    ELSE CerradaEn END,
+                           UsuarioModificacionAuditoria  = @Cuenta,
+                           FechaModificacionAuditoria    = @Ahora,
+                           EquipoModificacionAuditoria   = @Equipo,
+                           ProgramaModificacionAuditoria = @Programa
+                     WHERE IdObservacion = @IdObsAfectada;
+
+                    /* La respuesta del API informa que observacion se movio,
+                       igual que informa cual se creo. Con lote se devuelve la
+                       del primer expediente, como el resto de campos escalares. */
+                    SET @IdObservacion = COALESCE(@IdObservacion, @IdObsAfectada);
+                END
             END
 
             SET @Idx = @Idx + 1;
