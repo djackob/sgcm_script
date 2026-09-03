@@ -40,7 +40,6 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13k | `db/00_ddl/V018__filtro_idoneidad_catalogo.sql` | DBSIGCM | Catálogo RNSSC, REDAM, RPS_TCP, REDJUM, debida diligencia |
 | 13l | `db/00_ddl/V019__filtro_evidencia_memo_ccp.sql` | DBSIGCM | Evidencias PDF por filtro y cuerpo del memorando CCP |
 | 13m | `db/00_ddl/V020__ccp_carga_presupuestaria.sql` | DBSIGCM | Carga CCP / previsión presupuestal |
-| 13n | `db/00_ddl/V021__tipo_documento_ccp.sql` | DBSIGCM | Tipo de documento CCP |
 | 13o | `db/00_ddl/V022__vw_cuadro_pedido_siga.sql` | DBSIGCM | Vista cuadro de adquisición ↔ pedido |
 | 13p | `db/00_ddl/V023__crear_cuadro_adquisicion.sql` | DBSIGCM | Outbox `CREAR_CUADRO_ADQUISICION` |
 | 13q | `db/00_ddl/V024__numero_memorando_ccp.sql` | DBSIGCM | Numeración del memorando CCP |
@@ -71,7 +70,7 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 25c | `db/20_seed/S005__sso_perfil_derivacion.sql` | DBSIGCM | Mapeo `cod_perfil`→rol y aristas del árbol de derivación |
 | 25d | `db/20_seed/S006__cmn_derivacion_directa.sql` | DBSIGCM | Las dos transiciones del salto directo jefe→especialista en CMN |
 | 25e | `db/20_seed/S006__opp_oa_solo_jefe.sql` | DBSIGCM | CCP solo OPP; OA/OPP sin jerarquía interna |
-| 26 | `db/20_seed/S007__ccp_carga_dec.sql` | DBSIGCM | Carga de CCP por DEC |
+| 26 | `db/20_seed/S007__ccp_carga_dec.sql` | DBSIGCM | Carga de CCP por DEC, y los tipos memo UP / previsión presupuestal |
 | 27 | `db/20_seed/S007__panel_sso_administrador.sql` | DBSIGCM | Módulo `ADMIN_SSO`, su permiso, el mapeo `P0001` y el administrador |
 | 28 | `db/20_seed/S008__cmn_firma_a3_directo_oa.sql` | DBSIGCM | Firma Anexo 3 del jefe AU remite directo a OA |
 | 29 | `db/20_seed/S009__cmn_abast_sin_firma_coord.sql` | DBSIGCM | Especialista eleva Anexo 3 y Anexo 4 directo al jefe de Abastecimiento |
