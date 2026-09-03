@@ -147,8 +147,10 @@ Anexo 4 aprueba la solicitud de modificación en SIGA y **deja el ítem pedible*
 - El jefe del área usuaria puede **devolver al especialista** (`CMN_AU_JEFE_DEVOLVER`).
 - Al firmar el Anexo 4 se avisa por correo al área usuaria (`V028` + `F013`).
 
-### Requerimiento a Notificación — **cortado en dos puntos**
-Ver sección 5. Llega hasta `REQ_CCP_SOLICITADO` y ahí se detiene.
+### Requerimiento a Notificación — operativo
+Recorrido completo del registro a la notificación de la orden. `S019` creó las
+dos transiciones que faltaban (`REQ_REGISTRAR_CCP` y `REQ_NOTIFICAR_OS`): ya no
+queda ningún estado sin salida con expedientes dentro.
 
 ### Entregables y pagos — operativo con datos sembrados
 10 estados, 12 transiciones. La bandeja ya sigue el sistema visual y el detalle
@@ -166,14 +168,15 @@ Comprobados contra la base el 2026-09-03. **Ninguno es una suposición.**
 
 | # | Qué | Dónde | Efecto |
 |---|---|---|---|
-| 1 | Falta la transición `REQ_REGISTRAR_CCP` | ninguna semilla la define | `REQ_CCP_SOLICITADO` no tiene salida. `paRegistrarCcp` graba la CCP pero **no mueve el estado**. Sin esto no hay cuadro, ni orden, ni pagos desde un requerimiento real. |
-| 2 | Falta `REQ_NOTIFICAR_OS` | ninguna semilla la define | `F008` la ejecuta en su línea 1024; reventaría con `CONFLICTO_TRANSICION`. |
-| 3 | El combo de pedidos filtra `TipoPedido = '1'` | `F001`, maestro `PEDIDO`; comentado igual en `V012` | Debe ser `'2'`. En `SIGA_1750` el tipo 2 tiene 7 523 líneas **todas** enlazadas al CMN y el tipo 1 tiene 3 261 **ninguna**. Tal como está, el combo lista pedidos de almacén y nunca muestra el que nació del CMN. |
-| 4 | Numeración duplicada | dos `S006`, dos `F008` | Corren los dos porque el orden es alfabético, pero conviene renumerar. |
+| 1 | Numeración duplicada | dos `S006`, dos `F008` | Corren los dos porque el orden es alfabético, pero conviene renumerar. |
+| 2 | El alta del locador en el SSO lo registra siempre como persona natural | `jsonUsuarioExternoContrataciones`, `id_tipo_persona: 1` | Un locador con razón social debería ir con `2` (`login.tm_login_tipo_persona`). Con un locador persona natural —el caso de la prueba— no se nota. |
+| 3 | Nadie le dice al locador su contraseña | `login.fn_insertar_tm_login_usuario_externo_contrataciones` | La función la deriva de `SHA512(documento + año)` y responde «se le enviará las credenciales a su correo», pero ese correo no lo manda nadie. El correo de la O/S no las incluye. |
+| 4 | El SIGCM no espera los dos pasos que en SIGA hace una persona | `usp_ext_crear_cuadro_adquisicion_desde_pedido`; `paPrepararNotificacionOrden` | El cuadro se arma sin comprobar que el pedido esté autorizado (`SIG_PEDIDOS.ESTADO='1'`), y la orden se notifica sin leer si en SIGA fue aprobada y comprometida en SIAF (`ESTADO='1'`, `ESTADO_SIAF='2'`). Diagnóstico completo y camino propuesto en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` §6. |
+| 5 | El combo de pedidos manda a los bienes al tipo equivocado | `F001`, maestro `PEDIDO` | `TipoPedido` debe ser `'2'` para bien y para servicio: el tipo 2 es el pedido con cargo al CMN (453/453 líneas B y 7 070/7 070 S enlazadas) y el tipo 1 es almacén (0 de 3 261). Hoy sólo acierta con servicios. |
 
-Los tres primeros son del módulo de Requerimiento. **Definir una transición es
-fijar una regla de negocio** —qué estados une, qué roles, si encola hacia
-SIGA—, así que 1 y 2 le tocan a quien lleva ese módulo.
+Cerrados el 2026-09-03: `REQ_REGISTRAR_CCP` y `REQ_NOTIFICAR_OS` los crea `S019`;
+el filtro `TipoPedido` ya calcula `'2'` para servicios en `F001` y así está en la
+base —lo que decía este cuadro estaba desactualizado—.
 
 ---
 
@@ -196,6 +199,10 @@ La contraseña se pasa por `SQLCMDPASSWORD`, o usa `desa.ps1`, que la pide.
 - **Back:** perfil `https` en `https://localhost:7182`. Ver regla 3.2.
 - **SSO:** redirige a `http://192.168.20.111:9047/sso-acceso`; el front tiene que
   estar servido ahí o hay que cambiar `url_sistema` del sistema 73.
+- **Equipo sin dispositivo de firma:** `firma.omitir_dispositivo` en
+  `config.json`. En `true` no se abre el firmador y el paso avanza con el PDF sin
+  firmar; la firma igual queda registrada. **En el equipo de la presentación va
+  en `false`**, que es el valor por defecto.
 
 ### Usuarios de prueba
 Clave `123456` para todos. El recorrido completo, paso a paso y con los dos
@@ -255,6 +262,22 @@ Este archivo no los reemplaza: los ordena.
 
 Lo último, para que una sesión nueva sepa dónde se quedó. El detalle va en
 `CONTEXTO.md` §6.
+
+**2026-09-03 (tarde) · El flujo completo y la firma sin dispositivo**
+- `S019` crea `REQ_REGISTRAR_CCP` (`REQ_CCP_SOLICITADO` → `REQ_CCP_CARGADA`, DEC)
+  y `REQ_NOTIFICAR_OS` (`REQ_OS_EMITIDA` → `REQ_NOTIFICADO`, quien emitió la
+  orden). Los dos cortes del recorrido quedaron cerrados.
+- `firma.omitir_dispositivo` en `config.json` permite ensayar el flujo desde un
+  equipo sin el token de firma. Por defecto `false`.
+- Pagos firma el Anexo 11 pasando por el firmador, igual que CMN y Requerimiento;
+  el mecanismo salió a `core/services/firma-digital.service.ts`.
+- El alta del locador como usuario externo del SSO (SGCM-E) al notificar la orden
+  está verificada contra `saa_`: la función existe, el sistema 78 y el perfil
+  `ADMINISTRADO_EXT` están activos.
+- Diagnóstico del tramo pedido → cuadro → orden: quedan **dos actos que en SIGA
+  ejecuta una persona** (autorizar el pedido y aprobar/comprometer la orden) que
+  el SIGCM no espera ni comprueba. Defectos 4 y 5, con los datos que lo prueban,
+  en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` §6.
 
 **2026-09-03 · Observaciones de pantalla, SUNAT y puesta al día de la base**
 - Siete observaciones de CMN y Requerimiento: botones uniformes en la bandeja,

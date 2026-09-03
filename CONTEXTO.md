@@ -170,6 +170,64 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-03 (tarde) — Las dos transiciones que faltaban y la firma sin dispositivo
+
+**Qué pedía la presentación.** Que el recorrido completo —CMN → requerimiento →
+orden de servicio → pagos— se pueda hacer de punta a punta, y poder ensayarlo
+desde un equipo que **no tiene el dispositivo de firma** (una sesión de
+escritorio remoto), sin que eso cambie nada en la máquina donde sí se firma.
+
+**Los dos cortes, cerrados.** `REQ_CCP_SOLICITADO` y `REQ_OS_EMITIDA` eran
+estados sin salida: `S004`, `S006` y `S007` actualizaban `REQ_REGISTRAR_CCP` y le
+repartían roles, y `F008` ejecutaba `REQ_NOTIFICAR_OS` en su línea 1024, pero
+**ninguna semilla creaba las dos filas** de `sigcm.Transicion`. `S019` las crea
+con el reparto definitivo —CCP a la DEC (Abastecimiento), notificación a quien
+emitió la orden— y va después de `S006`/`S007` porque son las que borran roles.
+Comprobado contra la base: `paListarTransicionDisponible` ya devuelve
+«Notificar orden de servicio» para el expediente que estaba en `REQ_OS_EMITIDA`,
+y no queda ningún estado sin salida con expedientes dentro.
+
+**La firma, sin dispositivo.** `firma.omitir_dispositivo` en `config.json`
+(por defecto `false`): cuando está en `true` no se abre el firmador y el paso
+sigue con el PDF sin firmar. La firma **igual se registra** —
+`sigcm.paFirmarDocumento` anota quién firmó y nunca validó contra ONPE—, así que
+el expediente avanza igual. Es una llave de ambiente, no una ruta alterna del
+negocio: en el equipo donde se firma va en `false`.
+
+**Pagos firma como los otros dos módulos.** La transición `PAG_FIRMAR_ANEXO11`,
+su `TipoDocumentoFirma` y el PDF del Anexo 11 ya estaban (`S017`), pero la
+pantalla llamaba a `firmarDocumento` sin pasar por el firmador: el Acta quedaba
+«firmada» en la base con el PDF sin firma digital. Ahora genera, sube, abre el
+firmador y recién con el PDF firmado registra la firma y mueve el expediente,
+igual que CMN y Requerimiento. El código del firmador —popup, `postMessage`,
+lectura de la respuesta, carpeta por módulo— salió a
+`core/services/firma-digital.service.ts`; CMN y Requerimiento conservan el suyo y
+sólo consultan ahí la llave de ambiente.
+
+**Lo que resultó no ser un defecto.** El filtro `TipoPedido` ya está corregido
+para servicios: `F001` calcula `'2'` cuando el tipo de bien es `S`, y así está en
+la base. El defecto 3 de `INIT.md` estaba desactualizado. **Pero la regla completa
+es otra** (ver abajo).
+
+**Y el diagnóstico que salió de revisar eso.** `TIPO_PEDIDO` no separa área
+usuaria de almacén: separa **con cargo al CMN** de **contra stock**. El tipo 2 es
+el del CMN para bien y para servicio (453/453 líneas B y 7 070/7 070 S enlazadas
+por `SEC_CUA_MOD_SAL`), y el tipo 1 es almacén (0 de 3 261). `F001` manda los
+bienes al tipo 1: acierta sólo con servicios.
+
+Tirando de ese hilo apareció lo importante: entre el pedido y la notificación de
+la orden hay **dos actos que en SIGA ejecuta una persona** —autorizar el pedido
+(`SIG_PEDIDOS.ESTADO` `'0'`→`'1'`, opción 04 de Pedidos) y aprobar y comprometer
+la orden en SIAF (`ESTADO` `'0'`→`'1'`, `ESTADO_SIAF` `'0'`→`'2'`)— que el SIGCM
+**ni espera ni comprueba**. En la operación real no existe una sola orden en
+`ESTADO='0'`, que es justo donde la deja nuestro procedimiento. La recomendación
+es que el SIGCM **espere y verifique**, no que apruebe: el paso del SIAF es un
+compromiso presupuestal, y SIGA autoriza por usuario mientras nosotros escribimos
+con una sola conexión de servicio. Todo el detalle, con los conteos y el camino
+propuesto, en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` §6. Nada de esto se
+tocó: queda como defectos 4 y 5 de `INIT.md`.
+
+
 ### 2026-08-27 — El SSO trae el padrón, y el árbol de derivación es dato
 
 **Qué pidió el negocio.** Integrar el SSO institucional de verdad: traer su data

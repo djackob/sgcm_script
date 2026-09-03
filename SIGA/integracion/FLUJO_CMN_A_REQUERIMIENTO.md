@@ -256,3 +256,94 @@ Pero `modal-registro.component.html` **no lo renderiza**: cero ocurrencias de
 5. La **consolidación del PAAC** es otro proceso, por lotes, y no bloquea nada:
    hay 5 837 inclusiones aprobadas contra 4 406 consolidadas, y todas se pueden
    pedir.
+
+---
+
+## 6. Del pedido a la orden: los dos pasos que siguen siendo de una persona en SIGA
+
+Añadido el **2026-09-03**. Verificado contra `SIGA_1750`, ejercicio 2026,
+ejecutora 1750, y contra el código de los `usp_ext_*` que instalamos.
+
+La sección 0 responde que para **aprobar el CMN** no hace falta ningún
+logístico: eso lo hace el Anexo 4. Pero de ahí a la orden de servicio hay
+**otros dos actos que en SIGA los ejecuta una persona**, y que el SIGCM hoy ni
+espera ni comprueba.
+
+```
+  1. PEDIDO                SIG_PEDIDOS (TIPO_PEDIDO='2')    ESTADO '0'
+  2. AUTORIZACION          Pedidos → opcion 04              ESTADO '0' → '1'   ← PERSONA
+     DEL PEDIDO            (pagina 03020000)                graba cuser_id_vb
+  3. CUADRO DE ADQUISICION SIG_CUADRO_ADQUISICION           ESTADO '1' → '2'
+  4. ORDEN DE SERVICIO     SIG_ORDEN_ADQUISICION            ESTADO '0', SIAF '0'
+  5. APROBACION Y                                           ESTADO '0' → '1'   ← PERSONA
+     COMPROMISO SIAF                                        SIAF   '0' → '2'
+  6. Recien aqui la orden es notificable al locador
+```
+
+| Comprobación | Resultado |
+|---|---|
+| Pedidos de servicio (tipo 2 / S) 2026 | 7 024: **6 991 en `ESTADO='1'`**, 33 en `'0'` |
+| Los 6 991 autorizados | todos con `cuser_id_vb`; los 33 pendientes, ninguno |
+| Órdenes de servicio 2026 | 3 743 en `ESTADO='1'` + `ESTADO_SIAF='2'`, 58 anuladas, **ninguna en `ESTADO='0'`** |
+| Usuarios con la opción 04 (nivel 2 ó 3) | **93**, cada uno sobre su centro de costo |
+
+Una orden en `ESTADO='0'` **no existe en la operación real**. Es exactamente el
+estado en el que la deja `usp_ext_crear_orden_servicio_desde_cuadro`, cuya
+cabecera lo dice: *"Deja la orden pendiente… NO certifica, NO compromete y NO
+inserta `SIG_ORDEN_INTERFASE`"*.
+
+### Qué hace y qué no hace el SIGCM en esos dos puntos
+
+- `usp_ext_crear_cuadro_adquisicion_desde_pedido` lee `SIG_PEDIDOS` **sin mirar
+  `ESTADO`**: arma el cuadro aunque el pedido no esté autorizado. Escribe
+  `FECHA_APROB` pero no `ESTADO` ni `cuser_id_vb`.
+- El combo del requerimiento tampoco filtra: `siga.vwPedido` **ya expone
+  `Estado`** y el maestro `PEDIDO` de `F001` no lo usa. El `TODO` que espera
+  esta validación está desde el principio en `F005` («los pedidos se guardan con
+  `Verificado = 0`»), y `RequerimientoPedido.Verificado` nace en `0` y **nadie lo
+  pone en `1`**.
+- No existe ninguna vista sobre `SIG_ORDEN_ADQUISICION`: `REQ_NOTIFICAR_OS`
+  notifica al locador sin leer el estado de la orden en SIGA.
+
+### Por qué no lo resolvemos escribiendo nosotros ese estado
+
+El paso 5 es el **compromiso presupuestal SIAF**, que se materializa en
+`SIG_ORDEN_INTERFASE` hacia el MEF. Y traer al logístico a nuestro sistema
+tropieza con que **SIGA autoriza por usuario, no por sistema**: el permiso vive
+en `USERS_OPCION` y `SEG_ROL_PAGINA_PRIVILEGIO` cuenta por cuenta, mientras el
+SIGCM escribe con una sola conexión de servicio y pasa como usuario de auditoría
+el **DNI del actor del SIGCM**. Se ve en los datos: en `SIG_CUADRO_MODIFICADO_DET`
+conviven `IRIVERA`, `MPINO`, `NDIBURGA`… y una fila `S901`, que es la nuestra.
+Hacerlo desde aquí puentearía el control de acceso de SIGA y dejaría su auditoría
+apuntando a un usuario que en SIGA no existe.
+
+**Camino recomendado (pendiente):** que el SIGCM **espere y verifique**, no que
+apruebe. Vista `siga.vwOrdenServicio` sobre `SIG_ORDEN_ADQUISICION`, candado en
+`paPrepararNotificacionOrden` mientras `ESTADO <> '1'` o `ESTADO_SIAF <> '2'`,
+y en el combo del pedido exigir `Estado = '1'` marcando `Verificado = 1`.
+
+### Corrección a la sección 4.2: el tipo de pedido no separa área usuaria de almacén
+
+`TIPO_PEDIDO` separa **con cargo al CMN** de **contra stock**, y se combina con
+`TIPO_BIEN`:
+
+```
+SIG_DETALLE_PEDIDOS (2026, ejecutora 1750)
+  TIPO_PEDIDO  TIPO_BIEN  lineas   con enlace al CMN (SEC_CUA_MOD_SAL)
+       1           B       3 261                0
+       2           B         453              453   (100 %)
+       2           S       7 070            7 070   (100 %)
+```
+
+El pedido que nace del CMN es el **tipo 2, sea bien o servicio**; el `TIPO_BIEN`
+es el que separa bienes de servicios. `F001` hoy calcula
+`CASE WHEN TipoBien='S' THEN '2' ELSE '1'`: acierta para servicios y **para
+bienes manda al tipo 1**, que son los pedidos de almacén sin un solo enlace al
+cuadro. Debe ser `'2'` en los dos casos. **Pendiente, no corregido.**
+
+### Estado de la integración en desarrollo
+
+`integracion.Operacion` sólo tiene `INCLUIR_ITEM` y `CONSOLIDAR_CMN` completadas:
+**`CREAR_CUADRO_ADQUISICION` y `CREAR_ORDEN_SERVICIO` no se han ejecutado nunca
+contra SIGA**. El requerimiento de prueba con orden emitida lo siembra `S909` en
+nuestras tablas. Ese tramo está escrito y **no probado contra SIGA**.
