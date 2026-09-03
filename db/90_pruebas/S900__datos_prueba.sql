@@ -89,6 +89,22 @@ IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-OPP')
                               UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
     VALUES ('UO-OPP', 'Oficina de Planeamiento y Presupuesto', 'OPP', 0, 'seed', 'localhost', 'S900');
 
+IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-UC')
+    INSERT INTO sigcm.Unidad (Codigo, Nombre, Sigla, EsAreaUsuaria,
+                              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+    VALUES ('UO-UC', 'Unidad de Contabilidad', 'UC', 0, 'seed', 'localhost', 'S900');
+
+IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-UT')
+    INSERT INTO sigcm.Unidad (Codigo, Nombre, Sigla, EsAreaUsuaria,
+                              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+    VALUES ('UO-UT', 'Unidad de Tesoreria', 'UT', 0, 'seed', 'localhost', 'S900');
+
+IF NOT EXISTS (SELECT 1 FROM sigcm.Unidad WHERE Codigo = 'UO-LOCADOR')
+    INSERT INTO sigcm.Unidad (Codigo, Nombre, Sigla, EsAreaUsuaria,
+                              UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+    VALUES ('UO-LOCADOR', 'Portal del locador (acceso externo)', 'LOC', 0, 'seed', 'localhost', 'S900');
+GO
+
 /*
   AREAS USUARIAS REALES, PARA PROBAR EL ANEXO 4 MULTIPLE
   ------------------------------------------------------
@@ -200,7 +216,17 @@ INSERT INTO @Usuario VALUES
   ('prueba.us.jefe',      'Marina', 'Zegarra Pinto',   'Jefa de la Unidad de Soporte'),
   ('prueba.orh.esp',      'Cesar',  'Ibanez Torres',   'Especialista de la ORH'),
   ('prueba.orh.coord',    'Julia',  'Ampuero Vela',    'Coordinadora de la ORH'),
-  ('prueba.orh.jefe',     'Fabian', 'Rojas Delgado',   'Jefe de la Oficina de Recursos Humanos');
+  ('prueba.orh.jefe',     'Fabian', 'Rojas Delgado',   'Jefe de la Oficina de Recursos Humanos'),
+
+  /* Cuenta real del SSO (DNI). Sin esta fila, el ingreso institucional de
+     Cesar Ortiz abre menu pero la primera accion del Anexo 3 cae en
+     VALIDACION_ACTOR: falta Actor.Unidad, porque el token no trae dependencia
+     y no hay terna que inferir. */
+  ('46183970',            'Cesar',  'Ortiz',           'Especialista de la OTI'),
+
+  ('prueba.locador',      'Denis',  'Ochoa Berrocal',  'Locador de servicios (portal externo)'),
+  ('prueba.contab',       'Elena',  'Paredes Lujan',   'Analista de Contabilidad'),
+  ('prueba.tesoreria',    'Hugo',   'Salazar Ponce',   'Especialista de Tesoreria');
 
 /* El cargo se actualiza aunque la cuenta ya exista: 'prueba.abastecim' figuraba
    como Coordinador pero ejercia tambien de jefe, y ahora es solo lo primero. */
@@ -212,6 +238,17 @@ INSERT INTO sigcm.Usuario (Cuenta, Nombres, Apellidos, Cargo,
 SELECT s.Cuenta, s.Nombres, s.Apellidos, s.Cargo, 'seed', 'localhost', 'S900'
   FROM @Usuario AS s
  WHERE NOT EXISTS (SELECT 1 FROM sigcm.Usuario AS d WHERE d.Cuenta = s.Cuenta);
+
+/* La cuenta del SSO ES el DNI. Sin DocumentoIdentidad, el padron no puede
+   emparejarla en la segunda corrida y crearia un duplicado. */
+UPDATE sigcm.Usuario
+   SET DocumentoIdentidad = Cuenta
+ WHERE Cuenta = '46183970' AND NULLIF(DocumentoIdentidad, '') IS NULL;
+
+UPDATE sigcm.Usuario
+   SET DocumentoIdentidad = '43724871',
+       Correo = 'djackob27@gmail.com'
+ WHERE Cuenta = 'prueba.locador';
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -246,7 +283,11 @@ INSERT INTO @Asignacion VALUES
   ('prueba.us.jefe',      'AREA_JEFE',          'UO-US',     1),
   ('prueba.orh.esp',      'AREA_ESPECIALISTA',  'UO-ORH',    0),
   ('prueba.orh.coord',    'AREA_COORDINADOR',   'UO-ORH',    0),
-  ('prueba.orh.jefe',     'AREA_JEFE',          'UO-ORH',    1);
+  ('prueba.orh.jefe',     'AREA_JEFE',          'UO-ORH',    1),
+  ('46183970',            'AREA_ESPECIALISTA',  'UO-OTI',    0),
+  ('prueba.locador',      'PROVEEDOR',          'UO-LOCADOR', 0),
+  ('prueba.contab',       'CONTABILIDAD',       'UO-UC',     0),
+  ('prueba.tesoreria',    'TESORERIA',          'UO-UT',     0);
 
 INSERT INTO sigcm.UsuarioRol (IdUsuario, CodigoRol, IdUnidad, EsTitular,
                               UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)

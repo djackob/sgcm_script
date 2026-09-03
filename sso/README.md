@@ -22,6 +22,7 @@ Una fila hecha a mano no sobrevive a un despliegue. Por eso está aquí.
 | Script | Qué hace | ¿Aprobado? |
 |---|---|---|
 | `S01__acceso_administrador.sql` | Da el perfil `P0001 ADMINISTRADOR` del sistema `S0073` a la persona que se indique | sí, aplicado en desarrollo el 2026-08-28 |
+| `S02__acceso_coordinador_oti.sql` | Crea `PE099 COORDINADOR OFICINA`, lo liga a `S0073` y se lo asigna a la persona en OTI | sí, aplicado en desarrollo el 2026-09-02 |
 
 Se ejecutan con `psql` y llevan su propio parámetro:
 
@@ -50,20 +51,12 @@ perfiles a cuentas que ya existen.
 
 ## Pendiente, no incluido a propósito
 
-**`COORDINADOR DE UNIDAD`.** El SSO no tiene perfil de coordinador para el área
-usuaria — su único `COORDINADOR` es `PE083`, que es de Abastecimiento. CMN no lo
-necesita, pero **Requerimiento sí**: su árbol declara el escalón y hoy está
-vacío, cosa que el panel de accesos muestra en ámbar.
-
-No hay script porque la decisión no está tomada. Cuando se tome, son tres pasos:
-una fila en `login.tm_login_perfil`, una en `login.td_login_perfil_sistema`
-apuntando al sistema `S0073`, los accesos de cada persona que ejerza el cargo, y
-una fila más en `db/20_seed/S005` mapeándolo a `AREA_COORDINADOR`.
-
-Se deja sin escribir a propósito: un script listo para correr invita a correrlo,
-y agregar perfiles al SSO institucional no es una decisión de este repositorio.
-Ver `CONTEXTO.md`, entrada del 2026-08-27, donde están las cuatro opciones
-evaluadas.
+**`COORDINADOR DE UNIDAD`.** El par de las unidades (`PE091`/`PE092`) sigue
+sin el escalón del medio. OTI, que es oficina, ya tiene `PE099 COORDINADOR
+OFICINA` (script `S02`). Cuando una unidad usuaria necesite el mismo papel,
+el paso es el mismo: una fila `PE100` (o el código libre) en
+`login.tm_login_perfil`, liga a `S0073`, accesos, y mapeo a `AREA_COORDINADOR`
+en `S005`.
 
 ## Ojo con el verificador de `instalar.ps1`
 

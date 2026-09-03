@@ -248,14 +248,12 @@ DECLARE @Paso TABLE (o int IDENTITY(1,1), quien varchar(10), codigo varchar(70),
 INSERT INTO @Paso (quien, codigo, firma, extra) VALUES
     ('ESP',   'CMN_GENERAR_A3',            0, NULL),
     ('JEFE',  'CMN_FIRMAR_A3',             1, NULL),
-    ('JEFE',  'CMN_ENVIAR_OA',             0, NULL),
     ('OA',    'CMN_OA_DERIVAR',            0, NULL),
     ('ABJE',  'CMN_ABAST_JEFE_DERIVAR',    0, NULL),
     ('ABCO',  'CMN_ABAST_COORD_DERIVAR',   0, NULL),
     /* Sin TipoInclusion: la tipificacion la declaro el area usuaria al registrar
        y esta transicion ya no la escribe. */
     ('ABES',  'CMN_ABAST_ESP_FIRMAR_A3',   1, NULL),
-    ('ABCO',  'CMN_ABAST_COORD_FIRMAR_A3', 1, NULL),
     ('ABJE',  'CMN_ABAST_JEFE_FIRMAR_A3',  1, NULL);
 
 DECLARE @o int, @quien varchar(10), @codTr varchar(70), @firmaPaso bit, @extraPaso nvarchar(100);
@@ -522,7 +520,6 @@ DECLARE @Lote nvarchar(max) =
 DECLARE @F4 TABLE (o int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(20));
 INSERT INTO @F4 (actor, codigo, etiqueta) VALUES
     (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista'),
-    (@ActorAbCo, 'CMN_ABAST_COORD_FIRMAR_A4', 'coordinador'),
     (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe');
 
 DECLARE @etiqueta varchar(20), @encoladasA4 int = 0, @movidos int = 0;
@@ -532,17 +529,18 @@ WHILE @o <= @totPaso
 BEGIN
     SELECT @actor = actor, @codTr = codigo, @etiqueta = etiqueta FROM @F4 WHERE o = @o;
 
-    /* Se firma por UN expediente: el documento es uno solo y la rutina lo
-       encuentra por cualquiera de sus enlaces. */
-    SET @p = N'{' + @actor + N',"IdExpediente":"' + @IdExpA + N'",
-      "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S903-A4-' + @etiqueta + N'"}';
-    DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
-    SELECT @j = j FROM @r;
-    IF JSON_VALUE(@j,'$.estado') <> '1'
-    BEGIN PRINT ' FALLO firma A4 (' + @etiqueta + '): ' + @j; EXEC #LimpiarS903; RETURN; END
+    IF @codTr <> 'CMN_GENERAR_A4'
+    BEGIN
+        SET @p = N'{' + @actor + N',"IdExpediente":"' + @IdExpA + N'",
+          "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S903-A4-' + @etiqueta + N'"}';
+        DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
+        SELECT @j = j FROM @r;
+        IF JSON_VALUE(@j,'$.estado') <> '1'
+        BEGIN PRINT ' FALLO firma A4 (' + @etiqueta + '): ' + @j; EXEC #LimpiarS903; RETURN; END
 
-    PRINT '  Firma del ' + @etiqueta + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
-        + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
+        PRINT '  Firma del ' + @etiqueta + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
+            + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
+    END
 
     /* La transicion, sobre los DOS expedientes a la vez. */
     SET @p = N'{' + @actor + N',"IdExpedientes":' + @Lote

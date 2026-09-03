@@ -43,6 +43,9 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 13n | `db/00_ddl/V021__tipo_documento_ccp.sql` | DBSIGCM | Tipo de documento CCP |
 | 13o | `db/00_ddl/V022__vw_cuadro_pedido_siga.sql` | DBSIGCM | Vista cuadro de adquisición ↔ pedido |
 | 13p | `db/00_ddl/V023__crear_cuadro_adquisicion.sql` | DBSIGCM | Outbox `CREAR_CUADRO_ADQUISICION` |
+| 13q | `db/00_ddl/V024__numero_memorando_ccp.sql` | DBSIGCM | Numeración del memorando CCP |
+| 13r | `db/00_ddl/V025__invitacion_cotizacion_locador.sql` | DBSIGCM | Invitación de cotización al locador (indagación uno a uno) |
+| 13t | `db/00_ddl/V027__pago_entregables.sql` | DBSIGCM | Expediente de pago por entregable, Anexo 9 y bitácora de hitos SIGA |
 | 14 | `db/10_api/F001__utilitarios_contrato.sql` | DBSIGCM | Actor, auditoría, correlativo, maestros |
 | 15 | `db/10_api/F002__cmn_solicitud.sql` | DBSIGCM | CMN: registrar, obtener, listar |
 | 16 | `db/10_api/F003__documentos_firmas.sql` | DBSIGCM | Documentos, firmas, versionado |
@@ -53,6 +56,9 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 19c | `db/10_api/F008__requerimiento_locacion.sql` | DBSIGCM | Locación: filtros, CCP, O/S, sobre de correo |
 | 19d | `db/10_api/F008__sso_padron_derivacion.sql` | DBSIGCM | Sincronización del padrón SSO y destinatarios de derivación |
 | 19e | `db/10_api/F009__panel_sso.sql` | DBSIGCM | Panel de accesos y perfiles (solo lectura, `ADMIN_SISTEMA`) |
+| 19f | `db/10_api/F010__notificacion_usuario_externo.sql` | DBSIGCM | Alta SSO del locador al notificar la O/S |
+| 19g | `db/10_api/F011__invitacion_cotizacion_locador.sql` | DBSIGCM | Sobre de invitación al locador (Anexo 5) y marca de envío |
+| 19h | `db/10_api/F012__pago_entregables.sql` | DBSIGCM | Entregables, conformidad, liquidación DEC, devengado y giro |
 | 20 | `db/15_siga/W001__escritor_cuadro_modificado.sql` | DBSIGCM | Escritor SIGA (CMN) |
 | 20b | `db/15_siga/W002__escritor_orden_servicio.sql` | DBSIGCM | Escritor SIGA (orden de servicio) |
 | 20c | `db/15_siga/W003__escritor_cuadro_adquisicion.sql` | DBSIGCM | Escritor SIGA (cuadro de adquisición + copia TDR) |
@@ -67,8 +73,18 @@ puebla. Dentro de cada bloque, el orden numérico.
 | 25e | `db/20_seed/S006__opp_oa_solo_jefe.sql` | DBSIGCM | CCP solo OPP; OA/OPP sin jerarquía interna |
 | 26 | `db/20_seed/S007__ccp_carga_dec.sql` | DBSIGCM | Carga de CCP por DEC |
 | 27 | `db/20_seed/S007__panel_sso_administrador.sql` | DBSIGCM | Módulo `ADMIN_SSO`, su permiso, el mapeo `P0001` y el administrador |
+| 28 | `db/20_seed/S008__cmn_firma_a3_directo_oa.sql` | DBSIGCM | Firma Anexo 3 del jefe AU remite directo a OA |
+| 29 | `db/20_seed/S009__cmn_abast_sin_firma_coord.sql` | DBSIGCM | Especialista eleva Anexo 3 y Anexo 4 directo al jefe de Abastecimiento |
+| 30 | `db/20_seed/S010__cmn_generar_a4_sin_firma_esp.sql` | DBSIGCM | Generar Anexo 4 no exige firma del especialista |
+| 31 | `db/20_seed/S011__req_firma_especialista.sql` | DBSIGCM | Acción del especialista AU: Firma especialista |
+| 32 | `db/20_seed/S012__perfil_coord_oficina.sql` | DBSIGCM | Mapeo PE099 COORDINADOR OFICINA → AREA_COORDINADOR |
+| 33 | `db/20_seed/S013__req_firma_au_directo_oa.sql` | DBSIGCM | Firma del jefe AU remite directo a OA |
+| 34 | `db/20_seed/S014__req_observar_filtros.sql` | DBSIGCM | Observar desde filtros de idoneidad hacia el Área usuaria |
+| 35 | `db/20_seed/S015__anexo8_cuadro_cotizaciones.sql` | DBSIGCM | Tipo Anexo 8 (bienes/servicios; locación con 1 cotización no lo usa) |
+| 36 | `db/20_seed/S016__indagacion_mercado_locacion.sql` | DBSIGCM | Indagación de mercado: invitación uno a uno, plazo 3 días hábiles |
+| 37 | `db/20_seed/S017__pago_entregables.sql` | DBSIGCM | Módulo Pago: estados, transiciones, Anexos 9/10/11 y plazos de la EDS |
 
-Pendiente: indagación competitiva (Anexo 8) para bienes y servicios. La locación por invitación directa no la usa.
+Pendiente: indagación competitiva (Anexo 8) para bienes y servicios. La locación por invitación directa (S016 / F011) ya invita al locador del Anexo 5 al entrar a `REQ_INDAGACION_MERCADO`. El flujo de entregables y pago (S017 / F012 / V027) cubre al locador desde la carga del RHE hasta el giro.
 
 El instalador descubre los scripts por patrón (`V*`, `F*`, `W*`, `S*`) y los
 aplica ordenados por nombre, así que agregar uno nuevo no obliga a tocar

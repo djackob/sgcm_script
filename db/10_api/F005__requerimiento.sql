@@ -475,7 +475,17 @@ BEGIN
             THROW 51427, 'CONFLICTO_CONFIGURACION: el modulo REQUERIMIENTO no tiene estado inicial. Falta ejecutar S003.', 1;
 
         DECLARE @Codigo varchar(40);
-        EXEC sigcm.paSiguienteCodigo 'REQ', @AnoEje, N'requerimiento.SeqRequerimiento', @Codigo OUTPUT;
+        DECLARE @AreaNumerica varchar(20) =
+            REPLACE(REPLACE(LTRIM(RTRIM(@CentroCosto)), '.', ''), ' ', '');
+        DECLARE @IdUsuarioNumerico int;
+        SELECT @IdUsuarioNumerico = IdUsuarioSso
+          FROM sigcm.Usuario WHERE IdUsuario = @IdUsuario;
+        IF @IdUsuarioNumerico IS NULL OR @IdUsuarioNumerico <= 0
+            SET @IdUsuarioNumerico = (ABS(CHECKSUM(CONVERT(varchar(36), @IdUsuario))) % 900) + 100;
+
+        EXEC sigcm.paSiguienteCodigo
+             'REQ', @AnoEje, N'requerimiento.SeqRequerimiento', @Codigo OUTPUT,
+             @AreaNumerica, @IdUsuarioNumerico;
 
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @IdExpediente uniqueidentifier, @IdRequerimiento uniqueidentifier;
@@ -707,7 +717,7 @@ BEGIN
                               c.GeneradoDocumentoMemo, c.NombreDocumentoMemo,
                               c.GeneradoDocumentoMemoUp, c.NombreDocumentoMemoUp,
                               c.GeneradoDocumentoPrevision, c.NombreDocumentoPrevision,
-                              c.CuerpoMemorando, c.Observacion
+                              c.CuerpoMemorando, c.Observacion, c.NumeroMemorando
                          FROM requerimiento.CertificacionCcp AS c
                         WHERE c.IdRequerimiento = r.IdRequerimiento AND c.Activo = 1
                           FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)),
@@ -894,6 +904,8 @@ BEGIN
                                                     AND tr.CodigoRol = @CodigoRol)
                                      AND t.CodigoTransicion <> 'REQ_REMITIR_DAI'
                                      AND NOT (t.CodigoTransicion = 'REQ_REMITIR_OA' AND r.CodigoDec <> 'ABASTECIMIENTO')
+                                     AND NOT (t.CodigoTransicion IN ('REQ_INICIAR_INDAGACION', 'REQ_INICIAR_FILTROS')
+                                              AND r.CodigoTipoContratacion <> 'LOCACION')
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)

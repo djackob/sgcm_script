@@ -374,6 +374,19 @@ BEGIN
             THROW 51216, @errRol, 1;
         END
 
+        IF @CodigoTransicion IN ('REQ_INICIAR_INDAGACION', 'REQ_INICIAR_FILTROS')
+           AND EXISTS (
+               SELECT 1
+                 FROM @Lote AS l
+                 JOIN requerimiento.Requerimiento AS r
+                   ON r.IdExpediente = l.IdExpediente AND r.Activo = 1
+                WHERE r.CodigoTipoContratacion <> 'LOCACION')
+        BEGIN
+            THROW 51232,
+                'CONFLICTO_TIPO: la indagacion uno a uno y los filtros de idoneidad solo aplican a locacion de servicios.',
+                1;
+        END
+
         IF @RequiereComentario = 1 AND NULLIF(LTRIM(RTRIM(@Comentario)), '') IS NULL
         BEGIN
             DECLARE @errCom nvarchar(400) = CONCAT(
@@ -382,20 +395,14 @@ BEGIN
         END
 
         /*
-          El documento debe existir en su version vigente y traer la firma que
-          respalda ESTE paso. Que exista un borrador no basta: es justamente lo
-          que la firma pretende impedir.
+          Si la transicion declara un documento, tiene que existir en su version
+          vigente. La FIRMA es otro requisito, y solo aplica cuando RequiereFirma
+          vale 1: generar el Anexo 4 deposita el PDF y lo remite, no lo firma;
+          firmarlo es el paso del jefe.
 
-          RolFirmaRequerida (V011) precisa cual firma:
-            NULL  -> la version tiene que estar FIRMADO, es decir con todas las
-                     firmas declaradas. Es lo que exige la recepcion del Anexo 4.
-            <rol> -> alcanza con la firma vigente de ese rol. Es lo que exige
-                     cada escalon de la cadena, porque a esa altura el documento
-                     todavia tiene firmas pendientes por diseno.
-
-          Se comprueba expediente por expediente: en un Anexo 4 consolidado el
-          documento es uno solo y esta enlazado a todos, pero el enlace podria
-          faltar para alguno y ese es exactamente el caso que hay que detener.
+          RolFirmaRequerida (V011) precisa cual firma cuando si se exige:
+            NULL  -> la version tiene que estar FIRMADO (todas las firmas).
+            <rol> -> alcanza con la firma vigente de ese rol.
         */
         IF @DocumentoRequerido IS NOT NULL
         BEGIN
@@ -413,7 +420,8 @@ BEGIN
                            AND d.CodigoTipoDocumento = @DocumentoRequerido
                            AND d.Anulado = 0 AND d.Activo = 1
                            AND (
-                                (@RolFirmaRequerida IS NULL AND dv.Estado = 'FIRMADO')
+                                @RequiereFirma = 0
+                             OR (@RolFirmaRequerida IS NULL AND dv.Estado = 'FIRMADO')
                              OR (@RolFirmaRequerida IS NOT NULL
                                  AND dv.Estado IN ('PARCIAL','FIRMADO')
                                  AND EXISTS (SELECT 1 FROM sigcm.Firma AS f
@@ -427,7 +435,8 @@ BEGIN
                 DECLARE @errDoc nvarchar(600) = CONCAT(
                     'CONFLICTO_DOCUMENTO: "', @NombreAccion, '" exige el documento ',
                     @DocumentoRequerido,
-                    CASE WHEN @RolFirmaRequerida IS NULL
+                    CASE WHEN @RequiereFirma = 0 THEN ''
+                         WHEN @RolFirmaRequerida IS NULL
                          THEN ' firmado por todos sus firmantes'
                          ELSE CONCAT(' con la firma vigente de ', @RolFirmaRequerida) END,
                     ', y el expediente ', @ExpSinDoc, ' no lo tiene asi.');
@@ -447,8 +456,11 @@ BEGIN
                usuaria, y es imprescindible desde que el Anexo 4 cubre varias:
                al remitirlo, cada Anexo 3 tiene que volver a la oficina que lo
                pidio, no a una sola para todos.
-            3. Si exactamente una unidad tiene ese rol, se usa esa. Es el caso de
-               OA y de Abastecimiento, que son unicas en la entidad.
+            3. Si exactamente una unidad CON centro de costo SIGA tiene ese rol,
+               se usa esa. Es el caso de OA y de Abastecimiento, que son unicas
+               en la entidad. Las unidades semilla sin centro (UO-OA) no cuentan:
+               si se mezclaran, esta regla nunca dispararia y el expediente se
+               quedaria en el area usuaria con un estado de OA.
             4. Si no, se conserva la unidad actual.
 
           La regla 2 va antes que la 3 y no al reves: cuando el rol destino es
@@ -465,13 +477,17 @@ BEGIN
             DECLARE @Candidatas int;
             SELECT @Candidatas = COUNT(DISTINCT ur.IdUnidad)
               FROM sigcm.UsuarioRol AS ur
-             WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1
+              JOIN sigcm.Unidad AS n ON n.IdUnidad = ur.IdUnidad
+             WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1 AND n.Activo = 1
+               AND NULLIF(LTRIM(RTRIM(n.CentroCostoSiga)), '') IS NOT NULL
                AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
 
             IF @Candidatas = 1
                 SELECT @UnidadUnicaRol = MIN(ur.IdUnidad)
                   FROM sigcm.UsuarioRol AS ur
-                 WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1
+                  JOIN sigcm.Unidad AS n ON n.IdUnidad = ur.IdUnidad
+                 WHERE ur.CodigoRol = @RolDestino AND ur.Activo = 1 AND n.Activo = 1
+                   AND NULLIF(LTRIM(RTRIM(n.CentroCostoSiga)), '') IS NOT NULL
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()));
         END
 
@@ -861,6 +877,11 @@ BEGIN
                         'CONFLICTO_CONFIGURACION: CREAR_ORDEN_SERVICIO solo aplica al modulo REQUERIMIENTO.',
                         1;
 
+                /* No consultar siga.vwCuadroAdquisicionPedido aqui: recorre
+                   SIG_CUADRO_ADQUISICION y el clic de emitir O/S supera el
+                   timeout de 30 s de la API. El SEC_CUADRO ya lo dejo el
+                   worker en CREAR_CUADRO_ADQUISICION. */
+
                 DECLARE @reqSinCuadro varchar(40);
                 DECLARE @pedidoDiag varchar(80);
                 SELECT TOP 1
@@ -875,18 +896,25 @@ BEGIN
                   JOIN requerimiento.RequerimientoPedido AS p ON p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1
                  WHERE NOT EXISTS (
                        SELECT 1
-                         FROM siga.vwCuadroAdquisicionPedido AS c
-                        WHERE c.AnoEje = p.AnoEje
-                          AND c.SecEjec = p.SecEjec
-                          AND c.NumeroPedido = RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6));
+                         FROM requerimiento.OrdenServicio AS os
+                        WHERE os.IdRequerimiento = r.IdRequerimiento
+                          AND os.Activo = 1
+                          AND os.SecCuadroSiga IS NOT NULL)
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM integracion.Operacion AS o
+                        WHERE o.IdRequerimiento = r.IdRequerimiento
+                          AND o.Operacion = 'CREAR_CUADRO_ADQUISICION'
+                          AND o.Estado = 'COMPLETADO'
+                          AND o.Activo = 1
+                          AND TRY_CONVERT(bigint, JSON_VALUE(o.ResponseJson, '$.SecCuadro')) IS NOT NULL);
 
                 IF @reqSinCuadro IS NOT NULL
                 BEGIN
                     DECLARE @errCuadro nvarchar(700) = CONCAT(
-                        'INTEGRACION_SIGA: no hay un cuadro de adquisicion de servicios elegible en SIGA para el pedido del requerimiento ',
+                        'INTEGRACION_SIGA: no hay un cuadro de adquisicion generado para el requerimiento ',
                         @reqSinCuadro, ' (', @pedidoDiag, '). ',
-                        'Ejecute antes la accion Generar cuadro de adquisicion. ',
-                        'El cuadro debe quedar sin orden (NRO_ORDEN nulo).');
+                        'Ejecute antes la accion Generar cuadro de adquisicion y espere a que quede completada.');
                     THROW 51226, @errCuadro, 1;
                 END
 
@@ -907,6 +935,38 @@ BEGIN
                     THROW 51227, @errProv, 1;
                 END
 
+                DECLARE @reqSinContratista varchar(40);
+                DECLARE @rucDiag varchar(11);
+                SELECT TOP 1
+                       @reqSinContratista = r.Codigo,
+                       @rucDiag = LEFT(REPLACE(COALESCE(
+                           JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
+                           JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')), ' ', ''), 11)
+                  FROM @Lote AS l
+                  JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
+                  JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
+                 WHERE NOT EXISTS (
+                       SELECT 1
+                         FROM requerimiento.OrdenServicio AS os
+                        WHERE os.IdRequerimiento = r.IdRequerimiento
+                          AND os.Activo = 1 AND os.ProveedorSiga IS NOT NULL)
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM siga.SIG_CONTRATISTAS AS pr
+                        WHERE pr.NRO_RUC = LEFT(REPLACE(COALESCE(
+                                  JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
+                                  JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')), ' ', ''), 11)
+                          AND COALESCE(pr.ESTADO, 'A') <> 'I');
+
+                IF @reqSinContratista IS NOT NULL
+                BEGIN
+                    DECLARE @errContratista nvarchar(500) = CONCAT(
+                        'INTEGRACION_SIGA: el RUC ', ISNULL(@rucDiag, '(vacio)'),
+                        ' del locador del requerimiento ', @reqSinContratista,
+                        ' no existe en SIG_CONTRATISTAS o esta inactivo.');
+                    THROW 51229, @errContratista, 1;
+                END
+
                 INSERT INTO integracion.Operacion
                     (IdempotenciaKey, IdExpediente, IdSolicitud, IdSolicitudItem,
                      IdRequerimiento, Operacion, Procedimiento, Secuencia, Estado, RequestJson,
@@ -924,7 +984,7 @@ BEGIN
                         AnoEje = p.AnoEje,
                         SecEjec = p.SecEjec,
                         SecCuadro = c.SecCuadro,
-                        Proveedor = prov.Proveedor,
+                        Proveedor = COALESCE(osPrev.ProveedorSiga, prov.Proveedor),
                         FechaOrden = CONVERT(varchar(30), @Ahora, 126),
                         Concepto = LEFT(r.Denominacion, 350),
                         PlazoEntrega = r.PlazoDias,
@@ -935,22 +995,33 @@ BEGIN
                   JOIN sigcm.Expediente AS e ON e.IdExpediente = l.IdExpediente
                   JOIN requerimiento.Requerimiento AS r ON r.IdExpediente = e.IdExpediente AND r.Activo = 1
                   JOIN requerimiento.RequerimientoPedido AS p ON p.IdRequerimiento = r.IdRequerimiento AND p.Activo = 1
+                  LEFT JOIN requerimiento.OrdenServicio AS osPrev
+                    ON osPrev.IdRequerimiento = r.IdRequerimiento AND osPrev.Activo = 1
                   CROSS APPLY (
-                      SELECT TOP 1 c2.SecCuadro
-                        FROM siga.vwCuadroAdquisicionPedido AS c2
-                       WHERE c2.AnoEje = p.AnoEje
-                         AND c2.SecEjec = p.SecEjec
-                         AND c2.NumeroPedido = RIGHT('000000' + LTRIM(RTRIM(p.NumeroPedido)), 6)
-                       ORDER BY c2.SecCuadro
+                      SELECT TOP 1 x.SecCuadro
+                        FROM (
+                              SELECT os.SecCuadroSiga AS SecCuadro, 0 AS Ord
+                                FROM requerimiento.OrdenServicio AS os
+                               WHERE os.IdRequerimiento = r.IdRequerimiento
+                                 AND os.Activo = 1
+                                 AND os.SecCuadroSiga IS NOT NULL
+                              UNION ALL
+                              SELECT TRY_CONVERT(bigint, JSON_VALUE(o.ResponseJson, '$.SecCuadro')), 1
+                                FROM integracion.Operacion AS o
+                               WHERE o.IdRequerimiento = r.IdRequerimiento
+                                 AND o.Operacion = 'CREAR_CUADRO_ADQUISICION'
+                                 AND o.Estado = 'COMPLETADO'
+                                 AND o.Activo = 1
+                          ) AS x
+                       WHERE x.SecCuadro IS NOT NULL
+                       ORDER BY x.Ord
                   ) AS c
-                  CROSS APPLY (
+                  OUTER APPLY (
                       SELECT TOP 1 pr.PROVEEDOR AS Proveedor
                         FROM siga.SIG_CONTRATISTAS AS pr
-                       WHERE REPLACE(pr.NRO_RUC, ' ', '') = REPLACE(
-                               COALESCE(
-                                   JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
-                                   JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')),
-                               ' ', '')
+                       WHERE pr.NRO_RUC = LEFT(REPLACE(COALESCE(
+                                 JSON_VALUE(r.DatosAdicionales, '$.Proveedores[0].Ruc'),
+                                 JSON_VALUE(r.DatosAdicionales, '$.Proveedor.Ruc')), ' ', ''), 11)
                          AND COALESCE(pr.ESTADO, 'A') <> 'I'
                        ORDER BY pr.PROVEEDOR
                   ) AS prov
@@ -958,7 +1029,8 @@ BEGIN
                        SELECT 1 FROM requerimiento.CertificacionCcp AS ccp
                         WHERE ccp.IdRequerimiento = r.IdRequerimiento
                           AND ccp.Activo = 1
-                          AND NULLIF(LTRIM(RTRIM(ccp.NumeroCcp)), '') IS NOT NULL);
+                          AND NULLIF(LTRIM(RTRIM(ccp.NumeroCcp)), '') IS NOT NULL)
+                   AND COALESCE(osPrev.ProveedorSiga, prov.Proveedor) IS NOT NULL;
 
                 SET @Encoladas = @@ROWCOUNT;
 

@@ -53,6 +53,7 @@ INSERT INTO @Perfil VALUES
   ('PE079', 'JEFE OFICINA',         'AREA_JEFE',          N'Area usuaria a nivel de oficina. Mismo papel que PE091 en el flujo.'),
   ('PE092', 'ESPECIALISTA UNIDAD',  'AREA_ESPECIALISTA',  N'Area usuaria. Registra el Anexo 3 y subsana observaciones.'),
   ('PE080', 'ESPECIALISTA OFICINA', 'AREA_ESPECIALISTA',  N'Area usuaria a nivel de oficina. Mismo papel que PE092.'),
+  ('PE099', 'COORDINADOR OFICINA',  'AREA_COORDINADOR',   N'Area usuaria a nivel de oficina. Completa el par PE079/PE080. Requerimiento pasa por este escalon.'),
   ('PE081', 'JEFE OA',              'OA',                 N'Oficina de Administracion. Revisa, observa o deriva a Abastecimiento.'),
   ('PE082', 'JEFE UA',              'ABAST_JEFE',         N'Abastecimiento. Ultima firma del Anexo 3 y del Anexo 4.'),
   ('PE083', 'COORDINADOR UA',       'ABAST_COORDINADOR',  N'Abastecimiento. Deriva al especialista y firma en segundo lugar.'),

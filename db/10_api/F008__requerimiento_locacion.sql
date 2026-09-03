@@ -80,11 +80,66 @@ BEGIN
                             WHERE f.IdRequerimiento = @IdRequerimiento
                               AND f.CodigoFiltro = t.CodigoFiltro);
 
+        /* Numero del memorando: 001-AAAA-ANIN/OA-UA. Se reserva solo cuando
+           el llamador lo pide (modal de solicitud CCP), y se reutiliza. */
+        DECLARE @NumeroMemorando varchar(40);
+        DECLARE @AnoMemo smallint;
+        DECLARE @ReservarMemo bit = ISNULL(TRY_CONVERT(bit, JSON_VALUE(@parametro, '$.ReservarNumeroMemo')), 0);
+
+        SELECT @AnoMemo = e.AnoEje, @NumeroMemorando = NULLIF(LTRIM(RTRIM(c.NumeroMemorando)), '')
+          FROM requerimiento.Requerimiento AS r
+          JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
+          LEFT JOIN requerimiento.CertificacionCcp AS c
+                 ON c.IdRequerimiento = r.IdRequerimiento AND c.Activo = 1
+         WHERE r.IdRequerimiento = @IdRequerimiento;
+
+        IF @ReservarMemo = 1 AND @NumeroMemorando IS NULL
+        BEGIN
+            DECLARE @NombreCorr nvarchar(128) = CONCAT(N'requerimiento.SeqMemoCcp|',
+                CONVERT(varchar(4), ISNULL(@AnoMemo, YEAR(GETDATE()))));
+            DECLARE @ValorMemo bigint;
+
+            IF NOT EXISTS (SELECT 1 FROM sigcm.Correlativo WITH (UPDLOCK, HOLDLOCK)
+                            WHERE Nombre = @NombreCorr)
+                INSERT INTO sigcm.Correlativo (Nombre, Valor) VALUES (@NombreCorr, 0);
+
+            UPDATE sigcm.Correlativo
+               SET @ValorMemo = Valor = Valor + 1
+             WHERE Nombre = @NombreCorr;
+
+            DECLARE @CorrMemo varchar(12) = CONVERT(varchar(12), @ValorMemo);
+            IF @ValorMemo < 1000
+                SET @CorrMemo = RIGHT(CONCAT('000', @CorrMemo), 3);
+
+            SET @NumeroMemorando = CONCAT(@CorrMemo, '-',
+                CONVERT(varchar(4), ISNULL(@AnoMemo, YEAR(GETDATE()))),
+                '-ANIN/OA-UA');
+
+            MERGE requerimiento.CertificacionCcp AS c
+            USING (SELECT @IdRequerimiento AS IdRequerimiento) AS s
+            ON c.IdRequerimiento = s.IdRequerimiento
+            WHEN MATCHED THEN
+                UPDATE SET c.NumeroMemorando = ISNULL(NULLIF(LTRIM(RTRIM(c.NumeroMemorando)), ''), @NumeroMemorando),
+                           c.UsuarioModificacionAuditoria = @Cuenta,
+                           c.FechaModificacionAuditoria = GETDATE(),
+                           c.EquipoModificacionAuditoria = @Equipo,
+                           c.ProgramaModificacionAuditoria = @Programa
+            WHEN NOT MATCHED THEN
+                INSERT (IdRequerimiento, NumeroMemorando,
+                        UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+                VALUES (@IdRequerimiento, @NumeroMemorando, @Cuenta, @Equipo, @Programa);
+
+            SELECT @NumeroMemorando = NULLIF(LTRIM(RTRIM(c.NumeroMemorando)), '')
+              FROM requerimiento.CertificacionCcp AS c
+             WHERE c.IdRequerimiento = @IdRequerimiento AND c.Activo = 1;
+        END
+
         SELECT @resultado = (
             SELECT 1 AS estado,
+                   @NumeroMemorando AS NumeroMemorando,
                    Filtros = JSON_QUERY(COALESCE((
                        SELECT f.IdFiltro, f.CodigoFiltro, Tipo = t.Nombre, t.Orden,
-                              f.Resultado, f.Origen, f.Observacion, f.FechaVerificacion,
+                              f.Resultado, f.ResultadoPid, f.Origen, f.Observacion, f.FechaVerificacion,
                               f.GeneradoDocumentoEvidencia, f.NombreDocumentoEvidencia
                          FROM requerimiento.FiltroIdoneidad AS f
                          JOIN requerimiento.FiltroTipo AS t ON t.CodigoFiltro = f.CodigoFiltro
@@ -157,12 +212,13 @@ BEGIN
 
         MERGE requerimiento.FiltroIdoneidad AS d
         USING (
-            SELECT CodigoFiltro, Resultado, Origen, Observacion,
+            SELECT CodigoFiltro, Resultado, ResultadoPid, Origen, Observacion,
                    GeneradoDocumentoEvidencia, NombreDocumentoEvidencia
               FROM OPENJSON(@parametro, '$.Filtros')
               WITH (
                   CodigoFiltro               varchar(30),
                   Resultado                  varchar(20),
+                  ResultadoPid               varchar(20),
                   Origen                     varchar(20),
                   Observacion                nvarchar(500),
                   GeneradoDocumentoEvidencia nvarchar(1000),
@@ -172,6 +228,7 @@ BEGIN
         ON d.IdRequerimiento = @IdRequerimiento AND d.CodigoFiltro = s.CodigoFiltro
         WHEN MATCHED THEN
             UPDATE SET d.Resultado = ISNULL(NULLIF(LTRIM(RTRIM(s.Resultado)), ''), d.Resultado),
+                       d.ResultadoPid = ISNULL(NULLIF(LTRIM(RTRIM(s.ResultadoPid)), ''), d.ResultadoPid),
                        d.Origen = ISNULL(NULLIF(LTRIM(RTRIM(s.Origen)), ''), 'MANUAL'),
                        d.Observacion = s.Observacion,
                        d.GeneradoDocumentoEvidencia = ISNULL(NULLIF(LTRIM(RTRIM(s.GeneradoDocumentoEvidencia)), ''), d.GeneradoDocumentoEvidencia),
@@ -182,11 +239,12 @@ BEGIN
                        d.EquipoModificacionAuditoria = @Equipo,
                        d.ProgramaModificacionAuditoria = @Programa
         WHEN NOT MATCHED THEN
-            INSERT (IdRequerimiento, CodigoFiltro, Resultado, Origen, Observacion,
+            INSERT (IdRequerimiento, CodigoFiltro, Resultado, ResultadoPid, Origen, Observacion,
                     GeneradoDocumentoEvidencia, NombreDocumentoEvidencia, FechaVerificacion,
                     UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
             VALUES (@IdRequerimiento, s.CodigoFiltro,
                     ISNULL(NULLIF(LTRIM(RTRIM(s.Resultado)), ''), 'PENDIENTE'),
+                    ISNULL(NULLIF(LTRIM(RTRIM(s.ResultadoPid)), ''), 'PENDIENTE'),
                     ISNULL(NULLIF(LTRIM(RTRIM(s.Origen)), ''), 'MANUAL'),
                     s.Observacion,
                     NULLIF(LTRIM(RTRIM(s.GeneradoDocumentoEvidencia)), ''),
@@ -344,8 +402,8 @@ BEGIN
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
 
-        IF @CodigoRol <> 'ABAST_JEFE'
-            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP a OPP la emite el Jefe de Abastecimiento.', 1;
+        IF @CodigoRol NOT IN ('ABAST_ESPECIALISTA', 'ABAST_COORDINADOR', 'ABAST_JEFE')
+            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP la confirma Abastecimiento (DEC).', 1;
 
         DECLARE @IdRequerimiento uniqueidentifier =
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdRequerimiento'));
@@ -368,8 +426,8 @@ BEGIN
           FROM sigcm.Expediente AS e
          WHERE e.IdExpediente = @IdExpediente;
 
-        IF @EstadoFiltro <> 'REQ_FILTROS_JEFE'
-            THROW 51828, 'CONFLICTO_ESTADO: la solicitud de CCP solo procede cuando el expediente esta con el jefe de Abastecimiento.', 1;
+        IF @EstadoFiltro NOT IN ('REQ_FILTROS', 'REQ_FILTROS_JEFE')
+            THROW 51828, 'CONFLICTO_ESTADO: la solicitud de CCP solo procede en la etapa de filtros de idoneidad.', 1;
 
         /* Misma siembra que paListarFiltroIdoneidad: si el especialista confirma
            desde la bandeja sin abrir el detalle, los registros deben existir. */
@@ -383,6 +441,24 @@ BEGIN
            AND NOT EXISTS (SELECT 1 FROM requerimiento.FiltroIdoneidad AS f
                             WHERE f.IdRequerimiento = @IdRequerimiento
                               AND f.CodigoFiltro = t.CodigoFiltro);
+
+        IF EXISTS (SELECT 1
+                     FROM requerimiento.FiltroIdoneidad AS f
+                    WHERE f.IdRequerimiento = @IdRequerimiento AND f.Activo = 1
+                      AND f.CodigoFiltro = 'SUNAT_HABIDO'
+                      AND (f.Resultado <> 'CONFORME'
+                           OR f.GeneradoDocumentoEvidencia IS NULL
+                           OR LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)) = ''))
+            THROW 51823, 'VALIDACION_IDONEIDAD: SUNAT debe figurar como Activo y Habido y con la constancia PDF.', 1;
+
+        IF EXISTS (SELECT 1
+                     FROM requerimiento.FiltroIdoneidad AS f
+                    WHERE f.IdRequerimiento = @IdRequerimiento AND f.Activo = 1
+                      AND f.CodigoFiltro = 'RNP'
+                      AND (f.Resultado <> 'CONFORME'
+                           OR f.GeneradoDocumentoEvidencia IS NULL
+                           OR LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)) = ''))
+            THROW 51823, 'VALIDACION_IDONEIDAD: el RNP debe estar vigente y con la constancia PDF.', 1;
 
         IF EXISTS (SELECT 1
                      FROM requerimiento.FiltroIdoneidad AS f
@@ -405,7 +481,7 @@ BEGIN
                          JOIN requerimiento.FiltroTipo AS t
                            ON t.CodigoFiltro = f.CodigoFiltro AND t.Activo = 1
                         WHERE f.IdRequerimiento = @IdRequerimiento AND f.Activo = 1)
-            THROW 51825, 'VALIDACION_IDONEIDAD: no hay filtros registrados. Abra el expediente y registre la conformidad de cada registro.', 1;
+            THROW 51825, 'VALIDACION_IDONEIDAD: no hay filtros registrados. Abra Iniciar filtros de idoneidad y registre cada registro.', 1;
 
         IF EXISTS (SELECT 1
                      FROM requerimiento.FiltroIdoneidad AS f
@@ -414,12 +490,13 @@ BEGIN
                     WHERE f.IdRequerimiento = @IdRequerimiento AND f.Activo = 1
                       AND (f.GeneradoDocumentoEvidencia IS NULL
                            OR LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)) = ''))
-            THROW 51826, 'VALIDACION_IDONEIDAD: adjunte la evidencia PDF de cada filtro antes de solicitar la CCP.', 1;
+            THROW 51826, 'VALIDACION_IDONEIDAD: adjunte la evidencia PDF de SUNAT, RNP y de cada filtro de la matriz.', 1;
 
         DECLARE @CuerpoMemorando nvarchar(max);
         DECLARE @DocMemo nvarchar(1000) = JSON_VALUE(@parametro, '$.GeneradoDocumentoMemo');
         DECLARE @NomMemo nvarchar(1000) = JSON_VALUE(@parametro, '$.NombreDocumentoMemo');
         DECLARE @NotasMemo nvarchar(500) = JSON_VALUE(@parametro, '$.NotasMemorando');
+        DECLARE @NumeroMemo nvarchar(40) = JSON_VALUE(@parametro, '$.NumeroMemorando');
         DECLARE @EnviarSinFirma bit = ISNULL(TRY_CONVERT(bit, JSON_VALUE(@parametro, '$.EnviarSinFirma')), 0);
         DECLARE @AhoraCcp datetime = GETDATE();
 
@@ -427,11 +504,14 @@ BEGIN
           FROM OPENJSON(@parametro) WITH (CuerpoMemorando nvarchar(max) '$.CuerpoMemorando') AS j;
 
         IF @DocMemo IS NULL OR LTRIM(RTRIM(@DocMemo)) = ''
-            THROW 51827,
+        BEGIN
+            DECLARE @errMemo nvarchar(400) =
                 CASE WHEN @EnviarSinFirma = 1
                      THEN 'VALIDACION_CCP: genere y guarde el memorando antes de enviar a OPP.'
                      ELSE 'VALIDACION_CCP: firme el memorando de solicitud antes de enviar a OPP.'
-                END, 1;
+                END;
+            THROW 51827, @errMemo, 1;
+        END
 
         MERGE requerimiento.CertificacionCcp AS c
         USING (SELECT @IdRequerimiento AS IdRequerimiento) AS s
@@ -441,6 +521,7 @@ BEGIN
                        c.CuerpoMemorando = ISNULL(@CuerpoMemorando, c.CuerpoMemorando),
                        c.GeneradoDocumentoMemo = @DocMemo,
                        c.NombreDocumentoMemo = ISNULL(@NomMemo, c.NombreDocumentoMemo),
+                       c.NumeroMemorando = ISNULL(NULLIF(LTRIM(RTRIM(@NumeroMemo)), ''), c.NumeroMemorando),
                        c.Observacion = ISNULL(@NotasMemo, c.Observacion),
                        c.UsuarioModificacionAuditoria = @Cuenta,
                        c.FechaModificacionAuditoria = @AhoraCcp,
@@ -448,10 +529,10 @@ BEGIN
                        c.ProgramaModificacionAuditoria = @Programa
         WHEN NOT MATCHED THEN
             INSERT (IdRequerimiento, FechaSolicitud, CuerpoMemorando,
-                    GeneradoDocumentoMemo, NombreDocumentoMemo, Observacion,
+                    GeneradoDocumentoMemo, NombreDocumentoMemo, NumeroMemorando, Observacion,
                     UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
             VALUES (@IdRequerimiento, @AhoraCcp, @CuerpoMemorando,
-                    @DocMemo, @NomMemo, @NotasMemo,
+                    @DocMemo, @NomMemo, @NumeroMemo, @NotasMemo,
                     @Cuenta, @Equipo, @Programa);
 
         SET @parametro = JSON_MODIFY(@parametro, '$.IdExpediente', CONVERT(nvarchar(36), @IdExpediente));
@@ -822,7 +903,8 @@ BEGIN
 
         DECLARE @Codigo varchar(40), @Denominacion varchar(500), @Plazo int,
                 @NumeroOrden varchar(40), @CorreoLocador varchar(200), @CorreoAu varchar(200),
-                @IdExpediente uniqueidentifier, @Version int, @Estado varchar(60);
+                @IdExpediente uniqueidentifier, @Version int, @Estado varchar(60),
+                @Datos nvarchar(max), @Proveedor nvarchar(max);
 
         SELECT @Codigo = r.Codigo, @Denominacion = r.Denominacion, @Plazo = r.PlazoDias,
                @IdExpediente = r.IdExpediente,
@@ -830,7 +912,8 @@ BEGIN
                @CorreoLocador = o.CorreoLocador,
                @CorreoAu = o.CorreoAreaUsuaria,
                @Version = e.Version,
-               @Estado = e.CodigoEstado
+               @Estado = e.CodigoEstado,
+               @Datos = r.DatosAdicionales
           FROM requerimiento.Requerimiento AS r
           JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
           JOIN requerimiento.OrdenServicio AS o ON o.IdRequerimiento = r.IdRequerimiento AND o.Activo = 1
@@ -844,6 +927,10 @@ BEGIN
 
         IF NULLIF(LTRIM(RTRIM(@CorreoLocador)), '') IS NULL
             THROW 51854, 'VALIDACION_CORREO: el locador no tiene correo en el Anexo 5 / Anexo 6. Completelo antes de notificar.', 1;
+
+        SET @Proveedor = COALESCE(
+            JSON_QUERY(@Datos, '$.Proveedores[0]'),
+            JSON_QUERY(@Datos, '$.Proveedor'));
 
         DECLARE @Asunto nvarchar(300) = CONCAT(N'Orden de servicio ', ISNULL(@NumeroOrden, @Codigo), N' — ', @Denominacion);
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
@@ -863,6 +950,7 @@ BEGIN
                    Copia = @CorreoAu,
                    Asunto = @Asunto,
                    Cuerpo = @Cuerpo,
+                   JSON_QUERY(@Proveedor) AS Proveedor,
                    N'Sobre de notificación listo.' AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
@@ -936,6 +1024,18 @@ BEGIN
         SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', 'REQ_NOTIFICAR_OS');
         IF JSON_VALUE(@parametro, '$.Version') IS NULL
             SET @parametro = JSON_MODIFY(@parametro, '$.Version', @Version);
+
+        BEGIN TRY
+            IF OBJECT_ID(N'pago.paAbrirDesdeOrdenServicioInterno', N'P') IS NOT NULL
+            BEGIN
+                DECLARE @pPago nvarchar(max) = @parametro;
+                SET @pPago = JSON_MODIFY(@pPago, '$.IdRequerimiento', CONVERT(nvarchar(36), @IdRequerimiento));
+                EXEC pago.paAbrirDesdeOrdenServicioInterno @pPago;
+            END
+        END TRY
+        BEGIN CATCH
+            /* Hito 1 no bloquea la notificacion de la O/S. */
+        END CATCH
 
         EXEC sigcm.paEjecutarTransicion @parametro;
         RETURN;

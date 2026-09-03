@@ -1,4 +1,4 @@
-﻿/*
+/*
 ===============================================================================
   SIGCM - S902 : Continuar un expediente CMN desde el Anexo 4
   Motor  : SQL Server 2022 (compat 160)
@@ -141,7 +141,6 @@ PRINT ' PASO 2 - PDF del Anexo 4 registrado en version ' + ISNULL(JSON_VALUE(@j,
 DECLARE @F4 TABLE (n int IDENTITY(1,1), actor nvarchar(400), codigo varchar(70), etiqueta varchar(40));
 INSERT INTO @F4 (actor, codigo, etiqueta) VALUES
     (@ActorAbEs, 'CMN_GENERAR_A4',            'especialista'),
-    (@ActorAbCo, 'CMN_ABAST_COORD_FIRMAR_A4', 'coordinador'),
     (@ActorAbJe, 'CMN_ABAST_JEFE_FIRMAR_A4',  'jefe');
 
 DECLARE @n int = 1, @tot int = (SELECT COUNT(*) FROM @F4);
@@ -151,13 +150,16 @@ WHILE @n <= @tot
 BEGIN
     SELECT @ac = actor, @cd = codigo, @et = etiqueta FROM @F4 WHERE n = @n;
 
-    SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
-      "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S902-A4-' + @et + N'"}';
-    DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
-    SELECT @j = j FROM @r;
-    IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A4 ' + @et + ': ' + @j; RETURN; END
-    PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
-        + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
+    IF @cd <> 'CMN_GENERAR_A4'
+    BEGIN
+        SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente + N'",
+          "CodigoTipoDocumento":"CMN_ANEXO_4_APROBACION_MODIFICACION","ArchivoHash":"S902-A4-' + @et + N'"}';
+        DELETE FROM @r; INSERT INTO @r EXEC sigcm.paFirmarDocumento @p;
+        SELECT @j = j FROM @r;
+        IF JSON_VALUE(@j,'$.estado') <> '1' BEGIN PRINT ' FALLO firma A4 ' + @et + ': ' + @j; RETURN; END
+        PRINT '   Firma del ' + @et + ': documento ' + ISNULL(JSON_VALUE(@j,'$.EstadoDocumento'),'?')
+            + ', pendientes=' + ISNULL(JSON_VALUE(@j,'$.FirmasPendientes'),'?');
+    END
 
     SET @p = N'{' + @ac + N',"IdExpediente":"' + @IdExpediente
            + N'","CodigoTransicion":"' + @cd
