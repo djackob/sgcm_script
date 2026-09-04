@@ -156,6 +156,12 @@ queda ningún estado sin salida con expedientes dentro.
 10 estados, 12 transiciones. La bandeja ya sigue el sistema visual y el detalle
 abre en modal. El paso 1 lo da el rol `PROVEEDOR` desde el portal externo.
 
+**Integración con SIGA:** de los cinco hitos de `F012`, tres tienen contraparte
+real y están implementados —1 y 4 leen el estado de la orden y el expediente
+SIAF; el 2 escribe la recepción conforme—. Los hitos 3 y 5 no se implementan
+porque SIGA no tiene dónde: el ANIN devenga y gira en SIAF. El cuadro completo,
+con los conteos que lo sostienen, está en `SIGA/integracion/FLUJO_PAGOS.md`.
+
 ### Transversal
 SSO institucional como única puerta (`acceso_local = "false"`), selector de
 perfil, panel de accesos, firma en cadena, trazabilidad, cola hacia SIGA.
@@ -247,6 +253,7 @@ Este archivo no los reemplaza: los ordena.
 | Documento | Para qué |
 |---|---|
 | `ESTANDARES.md` | **Normativo.** Cómo se escribe un procedimiento, un endpoint, un componente. Léelo entero antes de escribir código nuevo. |
+| `RECORRIDO_PRUEBAS.md` | **El guion.** Cómo recorrer CMN → Requerimiento → Pagos de punta a punta, paso por paso, con la cuenta que da cada uno. |
 | `CONTEXTO.md` | Qué es el sistema, las decisiones de arquitectura y la **bitácora de iteraciones**. |
 | `LEEME.md` | Los cuatro bloques del proyecto y el estado de las copias de trabajo. |
 | `README.md` | La base de datos: estructura de carpetas y cómo instalar. |

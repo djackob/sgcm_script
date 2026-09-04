@@ -419,6 +419,9 @@ BEGIN
              OR (@CodigoRol <> 'PROVEEDOR' AND (
                     @SoloMiBandeja = 0
                  OR e.IdUnidadActual = @IdUnidad
+                 OR EXISTS (SELECT 1 FROM sigcm.Historial AS hb
+                             WHERE hb.IdExpediente = e.IdExpediente
+                               AND hb.IdActorUnidad = @IdUnidad)
                 ))
            );
 
@@ -484,10 +487,21 @@ BEGIN
                                condicion por rol no desaparecio: se movio a la
                                columna MeToca y al ORDER BY, para que lo
                                pendiente se marque y suba en vez de ser lo unico
-                               visible. Mismo criterio que en cmn.paListarSolicitud. */
+                               visible. Mismo criterio que en cmn.paListarSolicitud.
+
+                               Y la unidad sigue viendo lo que YA PASO por ella,
+                               no solo lo que tiene ahora: al firmar el Anexo 11
+                               el expediente se va a Abastecimiento y antes
+                               desaparecia de la bandeja del area usuaria, que
+                               perdia de vista un pago que todavia puede volverle
+                               observado (PAG_OBS_UC_AU). El historial es quien
+                               sabe por que unidades paso. */
                             OR (@CodigoRol <> 'PROVEEDOR' AND (
                                    @SoloMiBandeja = 0
                                 OR e.IdUnidadActual = @IdUnidad
+                                OR EXISTS (SELECT 1 FROM sigcm.Historial AS hb
+                                            WHERE hb.IdExpediente = e.IdExpediente
+                                              AND hb.IdActorUnidad = @IdUnidad)
                                ))
                           )
                         /* Primero lo que le toca a este perfil y dentro de cada
@@ -1061,13 +1075,16 @@ BEGIN
                FechaModificacionAuditoria = GETDATE()
          WHERE IdExpedientePago = @IdPago;
 
-        DECLARE @PayloadHito nvarchar(max) = (
-            SELECT @Dias AS DiasAtraso, @FechaPres AS FechaRecepcion
-              FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
-        EXEC pago.paRegistrarHito @IdPago, 2, 'Conformidad', 'SGCM_A_SIGA',
-             'sg_conformidad_servicio / sg_detalle_conformidad',
-             @PayloadHito,
-             N'Hito 2 stub: no existe usp_ext de conformidad. El Acta 11 queda en SGCM.';
+        /* Hito 2. Ya no es un stub: la conformidad firmada significa que el
+           servicio quedo recibido, y eso en SIGA se anota en la propia orden
+           (FLAG_RECEPCION / FECHA_RECEPCION). Se encola y lo escribe W004; la
+           rutina de encolado resuelve sola el caso del expediente sembrado, que
+           no tiene orden en SIGA. Ver SIGA/integracion/FLUJO_PAGOS.md. */
+        EXEC pago.paEncolarRecepcionOrden
+             @IdExpedientePago = @IdPago,
+             @Cuenta           = @Cuenta,
+             @Equipo           = @Equipo,
+             @Programa         = @Programa;
 
         SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', 'PAG_FIRMAR_ANEXO11');
         IF JSON_VALUE(@parametro, '$.Version') IS NULL

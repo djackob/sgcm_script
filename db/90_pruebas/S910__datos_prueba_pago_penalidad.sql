@@ -1,62 +1,53 @@
 /*
 ===============================================================================
-  SIGCM - S909 : Requerimiento con orden de servicio emitida, para probar PAGOS
+  SIGCM - S910 : Entregable CON PENALIDAD, para probar el Anexo 10
   Motor  : SQL Server 2022 (compat 160)
   Ambito : [DBSIGCM]   NO TOCA SIGA_1750
 
-  FUERA DE LA SERIE. Repetible y se limpia solo, como S903.
+  FUERA DE LA SERIE. Repetible y se limpia solo, igual que S909.
 
   ---------------------------------------------------------------------------
-  POR QUE EXISTE
+  QUE PRUEBA, Y EN QUE SE DIFERENCIA DE S909
   ---------------------------------------------------------------------------
-  El expediente de PAGO nace de una orden de servicio: pago.paAbrirDesdeOrden-
-  ServicioInterno busca una fila en requerimiento.OrdenServicio y si no la
-  encuentra no hace nada. Hoy no se puede llegar ahi por pantalla, por dos
-  huecos de la maquina de estados que este script NO inventa ni arregla:
+  S909 siembra el caso feliz: locador persona juridica y entregables presentados
+  en plazo, sin mora. Con eso NUNCA se ve el Anexo 10, porque la Directiva lo
+  pide "de corresponder" y sin atraso no corresponde.
 
-    1. Falta la transicion REQ_REGISTRAR_CCP (REQ_CCP_SOLICITADO ->
-       REQ_CCP_CARGADA). requerimiento.paRegistrarCcp graba la certificacion
-       pero no mueve el estado, asi que el expediente se queda ahi.
-    2. Falta REQ_NOTIFICAR_OS (REQ_OS_EMITIDA -> REQ_NOTIFICADO), que F008
-       ejecuta en su linea 1024.
+  S910 siembra el otro caso, el que faltaba:
 
-  Definir esas transiciones es fijar una regla de negocio -que estados unen, que
-  roles las ejecutan, si encolan hacia SIGA- y eso le toca al modulo de
-  Requerimiento. Mientras tanto, esto deja el punto de partida que PAGOS
-  necesita, sin tocar sigcm.Transicion.
+    - LOCADOR PERSONA NATURAL, con DNI y apellidos en vez de razon social.
+    - FECHA DE INICIO EN EL PASADO: el cronograma queda vencido, asi que los
+      entregables se presentan TARDE y al aprobar la conformidad tecnica la
+      rutina calcula dias de atraso.
+    - Con atraso hay penalidad por mora, y entonces:
+        * el boton de la DEC dice "Generar Anexos 9 y 10" en vez de solo el 9;
+        * el Anexo 11 marca CORRESPONDE PENALIDAD = Si;
+        * el giro exige la papeleta de deposito de penalidades.
 
-  ---------------------------------------------------------------------------
-  QUE SIMULA, Y QUE NO
-  ---------------------------------------------------------------------------
-  El requerimiento se crea con datos completos y coherentes, y el expediente se
-  deja directamente en REQ_OS_EMITIDA con su fila en requerimiento.OrdenServicio.
-
-  Esa fila la escribiria W002 al drenar la operacion CREAR_ORDEN_SERVICIO contra
-  SIGA. Aqui se escribe a mano y con EstadoIntegracion = 'SIMULADO', porque el
-  worker de integracion esta apagado en desarrollo y porque el objetivo es
-  probar PAGOS, no el viaje a SIGA. Los campos que vienen de SIGA -SecCuadroSiga
-  y ProveedorSiga- quedan nulos a proposito: NO son datos reales y ningun paso
-  de pagos los usa.
-
-  El historial se escribe como un solo movimiento de apertura. No se falsifica
-  el recorrido completo de aprobaciones: quien mire la trazabilidad tiene que
-  ver que este expediente se sembro, no que paso por catorce manos.
+  El atraso NO se escribe a mano: se consigue moviendo la fecha de inicio del
+  requerimiento hacia atras y dejando que pago.paAprobarConformidadTecnica haga
+  su cuenta. Un UPDATE de DiasAtraso daria el numero sin ejercitar la formula,
+  que es justamente lo que hay que probar.
 
   ---------------------------------------------------------------------------
   COMO SE USA
   ---------------------------------------------------------------------------
       sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I \
-             -i db/90_pruebas/S909__datos_prueba_pago.sql
+             -i db/90_pruebas/S910__datos_prueba_pago_penalidad.sql
 
-  Vuelve a correrlo cuantas veces quieras: borra lo suyo y lo rehace.
+  Vuelve a correrlo cuantas veces quieras: borra lo suyo y lo rehace. Convive
+  con S909: son dos requerimientos distintos y cada script limpia solo el suyo.
 
   Deja:
-    REQ-PRU-PAGO-0001   en REQ_OS_EMITIDA, area usuaria OTI, locacion,
-                        con 3 entregables de S/ 1,500.00 c/u.
-    O/S PRU-OS-0001     emitida.
-    3 expedientes de pago en PAG_PENDIENTE, uno por entregable.
+    REQ-PRU-PAGO-0002   en REQ_OS_EMITIDA, area usuaria OTI, locacion,
+                        con 2 entregables de S/ 2,000.00: el 1 llega 10 dias tarde
+                        -con penalidad- y el 2 dentro de plazo.
+    O/S PRU-OS-0002     emitida.
+    2 expedientes de pago, los dos presentados fuera de plazo.
 
-  Y entonces el recorrido de pagos arranca en su paso 1.
+  El recorrido sigue igual: 46183970 aprueba la conformidad tecnica -y ahi
+  aparece el atraso-, 44687266 firma el Anexo 11, 45648851 liquida con los
+  Anexos 9 y 10, 17400217 devenga y 10712503 gira.
 ===============================================================================
 */
 
@@ -66,13 +57,24 @@ SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO
 
-DECLARE @Codigo        varchar(40) = 'REQ-PRU-PAGO-0001';
-DECLARE @NumeroOrden   varchar(40) = 'PRU-OS-0001';
+DECLARE @Codigo        varchar(40) = 'REQ-PRU-PAGO-0002';
+DECLARE @NumeroOrden   varchar(40) = 'PRU-OS-0002';
 DECLARE @Ahora         datetime    = GETDATE();
 DECLARE @AnoEje        smallint    = YEAR(GETDATE());
 DECLARE @SecEjec       int         = 1750;
-DECLARE @Entregables   int         = 3;
-DECLARE @MontoMensual  decimal(18,2) = 1500.00;
+DECLARE @Entregables   int         = 2;
+DECLARE @MontoMensual  decimal(18,2) = 2000.00;
+
+/* La orden se emitio hace 40 dias y cada entregable vence a los 30 dias del
+   anterior. Con eso el PRIMERO llega 10 dias tarde -y genera penalidad- y el
+   SEGUNDO todavia esta en plazo. Asi el mismo requerimiento muestra los dos
+   casos: el boton de la DEC dice "Anexos 9 y 10" en uno y solo "Anexo 9" en el
+   otro.
+
+   El numero no es caprichoso: 10 dias x S/ 16.67 = S/ 166.70, por debajo del
+   10 % del contrato (S/ 400), que es el tope que dispara ALERTA_RESOLUCION. Un
+   atraso mayor obligaria a confirmar la alerta en cada prueba. */
+DECLARE @DiasAtras    int         = 40;
 
 /* El area usuaria y el responsable salen del padron, no de un id fijo: los
    identificadores cambian en cada ambiente. Se usa el especialista de OTI, que
@@ -97,10 +99,10 @@ SELECT TOP 1
  ORDER BY us.Cuenta;
 
 IF @IdResponsable IS NULL
-    THROW 59090, 'NO_ENCONTRADO: no hay un AREA_ESPECIALISTA del SSO en OTI. Entra una vez con 46183970 para que se sincronice el padron.', 1;
+    THROW 59095, 'NO_ENCONTRADO: no hay un AREA_ESPECIALISTA del SSO en OTI. Entra una vez con 46183970 para que se sincronice el padron.', 1;
 
 IF OBJECT_ID('pago.ExpedientePago', 'U') IS NULL
-    THROW 59091, 'FALTA_MIGRACION: no existe pago.ExpedientePago. Corre instalar.ps1 antes.', 1;
+    THROW 59096, 'FALTA_MIGRACION: no existe pago.ExpedientePago. Corre instalar.ps1 antes.', 1;
 
 /* -------------------------------------------------------------------------- */
 /* 1. Limpieza de la corrida anterior                                         */
@@ -200,20 +202,19 @@ END
 SET @IdExpediente    = NEWID();
 SET @IdRequerimiento = NEWID();
 
-/* El proveedor va como persona juridica -con RazonSocial- a proposito: es el
-   caso que el modulo de pagos no cubria hasta hoy, porque componia el nombre
-   del locador con apellidos que una empresa no tiene. Cambia TipoDocumento a
-   'DNI' y llena Nombres/ApellidoPaterno si quieres probar el otro caso. */
+/* El proveedor va como PERSONA NATURAL, con DNI y apellidos: es el caso que
+   S909 no cubre, porque alli el locador es una empresa con razon social. Entre
+   los dos scripts quedan probadas las dos formas de nombrar al locador. */
 DECLARE @Datos nvarchar(max) = (
     SELECT Proveedores = JSON_QUERY((
                SELECT TipoDocumento       = 'DNI',
-                      Dni                 = '',
-                      Ruc                 = '20601030405',
-                      RazonSocial         = 'SERVICIOS INTEGRALES DE PRUEBA S.A.C.',
-                      Nombres             = '',
-                      ApellidoPaterno     = '',
-                      ApellidoMaterno     = '',
-                      Email               = 'locador.prueba@anin.gob.pe',
+                      Dni                 = '45678912',
+                      Ruc                 = '10456789123',
+                      RazonSocial         = '',
+                      Nombres             = 'ROSA ELENA',
+                      ApellidoPaterno     = 'QUISPE',
+                      ApellidoMaterno     = 'HUAMAN',
+                      Email               = 'locador.natural@anin.gob.pe',
                       Celular             = '999888777',
                       Cci                 = '00219100123456789012',
                       CantidadEntregables = @Entregables,
@@ -231,7 +232,7 @@ INSERT INTO sigcm.Expediente
 VALUES (@IdExpediente, 'REQUERIMIENTO', @Codigo, @AnoEje, 'REQ_OS_EMITIDA', 1,
         @IdUnidad, @IdUnidad, @IdResponsable,
         0, 1,
-        'S909', @Ahora, 'SEED', 'SIGCM-PRUEBA');
+        'S910', @Ahora, 'SEED', 'SIGCM-PRUEBA');
 
 INSERT INTO requerimiento.Requerimiento
       (IdRequerimiento, IdExpediente, Codigo, AnoEje, SecEjec, CentroCosto,
@@ -243,10 +244,10 @@ INSERT INTO requerimiento.Requerimiento
 VALUES (@IdRequerimiento, @IdExpediente, @Codigo, @AnoEje, @SecEjec, @CentroCosto,
         'Servicio de prueba para el modulo de entregables y pagos',
         'LOCACION', 'ABASTECIMIENTO', 'INCLUIDO',
-        @Entregables * @MontoMensual, 90, CONVERT(date, @Ahora),
-        'Expediente sembrado por S909 para probar el modulo de pagos.',
+        @Entregables * @MontoMensual, 60, DATEADD(day, -@DiasAtras, CONVERT(date, @Ahora)),
+        'Expediente sembrado por S910 para probar el modulo de pagos.',
         @IdResponsable, @Datos, 1,
-        'S909', @Ahora, 'SEED', 'SIGCM-PRUEBA');
+        'S910', @Ahora, 'SEED', 'SIGCM-PRUEBA');
 
 /* Un solo movimiento, y dice lo que es. No se falsifica el recorrido de
    aprobaciones: si la trazabilidad mostrara catorce pasos que nadie dio, el
@@ -255,14 +256,19 @@ INSERT INTO sigcm.Historial
       (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
        Comentario, IdActor, ActorRol, IdActorUnidad, OcurridoEn)
 VALUES (@IdExpediente, NULL, 'REQ_OS_EMITIDA', NULL,
-        'Expediente sembrado por S909 directamente en REQ_OS_EMITIDA, para probar el modulo de pagos. No recorrio el flujo.',
+        'Expediente sembrado por S910 directamente en REQ_OS_EMITIDA, para probar el modulo de pagos. No recorrio el flujo.',
         @IdResponsable, 'AREA_ESPECIALISTA', @IdUnidad, @Ahora);
 
 /* -------------------------------------------------------------------------- */
 /* 3. Orden de servicio                                                       */
 /* -------------------------------------------------------------------------- */
 
-/* EstadoIntegracion = 'SIMULADO' y las claves de SIGA en NULL: esta fila la
+/* La orden se emitio hace @DiasAtras dias: pago.paAbrirDesdeOrdenServicioInterno
+   arma el cronograma desde FechaEmision, asi que con la emision en el pasado los
+   vencimientos de los dos entregables ya pasaron y la presentacion de hoy llega
+   tarde. Ese es todo el truco del script.
+
+   EstadoIntegracion = 'SIMULADO' y las claves de SIGA en NULL: esta fila la
    habria escrito W002 al drenar CREAR_ORDEN_SERVICIO. Dejarla marcada evita
    que alguien la confunda con una orden realmente emitida en SIGA. */
 INSERT INTO requerimiento.OrdenServicio
@@ -270,10 +276,10 @@ INSERT INTO requerimiento.OrdenServicio
        Activo, EstadoIntegracion,
        UsuarioCreacionAuditoria, FechaCreacionAuditoria,
        EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-VALUES (@IdRequerimiento, @NumeroOrden, @Ahora,
-        'locador.prueba@anin.gob.pe', 'area.prueba@anin.gob.pe',
+VALUES (@IdRequerimiento, @NumeroOrden, DATEADD(day, -@DiasAtras, @Ahora),
+        'locador.natural@anin.gob.pe', 'area.prueba@anin.gob.pe',
         1, 'SIMULADO',
-        'S909', @Ahora, 'SEED', 'SIGCM-PRUEBA');
+        'S910', @Ahora, 'SEED', 'SIGCM-PRUEBA');
 
 COMMIT TRANSACTION;
 
@@ -316,7 +322,7 @@ EXEC pago.paAbrirDesdeOrdenServicioInterno @p;
   prueba del area usuaria seria falsa.
 */
 
-DECLARE @CuentaLocador varchar(120) = 'locador.prueba';
+DECLARE @CuentaLocador varchar(120) = 'locador.natural';
 DECLARE @IdLocador     uniqueidentifier;
 
 SELECT @IdLocador = IdUsuario FROM sigcm.Usuario WHERE Cuenta = @CuentaLocador;
@@ -327,9 +333,9 @@ BEGIN
     INSERT INTO sigcm.Usuario (IdUsuario, Cuenta, Nombres, Apellidos, Correo, Activo,
                                UsuarioCreacionAuditoria, FechaCreacionAuditoria,
                                EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-    VALUES (@IdLocador, @CuentaLocador, 'SERVICIOS INTEGRALES', 'DE PRUEBA S.A.C.',
-            'locador.prueba@anin.gob.pe', 1,
-            'S909', @Ahora, 'SEED', 'SIGCM-PRUEBA');
+    VALUES (@IdLocador, @CuentaLocador, 'ROSA ELENA', 'QUISPE HUAMAN',
+            'locador.natural@anin.gob.pe', 1,
+            'S910', @Ahora, 'SEED', 'SIGCM-PRUEBA');
 END
 
 /* El rol va contra la unidad que tiene el expediente -el area usuaria que
@@ -342,7 +348,7 @@ IF NOT EXISTS (SELECT 1 FROM sigcm.UsuarioRol
                                   UsuarioCreacionAuditoria, FechaCreacionAuditoria,
                                   EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
     VALUES (@IdLocador, 'PROVEEDOR', @IdUnidad, 1, 1,
-            'S909', @Ahora, 'SEED', 'SIGCM-PRUEBA');
+            'S910', @Ahora, 'SEED', 'SIGCM-PRUEBA');
 
 DECLARE @CodigoUnidad varchar(30) = (SELECT Codigo FROM sigcm.Unidad WHERE IdUnidad = @IdUnidad);
 
@@ -357,7 +363,7 @@ DECLARE curEnt CURSOR LOCAL FAST_FORWARD FOR
       FROM pago.ExpedientePago AS p
       JOIN sigcm.Expediente AS e ON e.IdExpediente = p.IdExpediente
      WHERE p.IdRequerimiento = @IdRequerimiento
-       AND p.NumeroEntregable IN (1, 2)
+       AND p.NumeroEntregable IN (1, 2)   /* los dos, no queda ninguno pendiente */
      ORDER BY p.NumeroEntregable;
 
 OPEN curEnt;
@@ -420,5 +426,5 @@ SELECT entregable = p.NumeroEntregable,
  ORDER BY p.NumeroEntregable;
 GO
 
-PRINT 'S909 aplicada: REQ-PRU-PAGO-0001 en REQ_OS_EMITIDA con su orden y sus expedientes de pago.';
+PRINT 'S910 aplicada: REQ-PRU-PAGO-0002 en REQ_OS_EMITIDA con su orden y sus expedientes de pago.';
 GO

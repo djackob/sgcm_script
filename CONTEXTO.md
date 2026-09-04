@@ -170,6 +170,72 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-03 (noche) — La integración de pagos con SIGA, hito por hito
+
+**Qué se preguntó.** Dónde debería escribir el módulo de pagos en SIGA. `F012`
+había dejado cinco hitos declarados en `pago.HitoSincronizacion`, todos con
+mensajes de «stub» y «pendiente de usp_ext homologado», pero nadie había ido a
+mirar si en SIGA existía el sitio.
+
+**Qué se encontró al mirar.** Sólo tres de los cinco tienen dónde aterrizar:
+
+| Hito | Dirección | Objeto en SIGA | Evidencia |
+|---|---|---|---|
+| 1 · Activa O/S | SIGA → SGCM | `ESTADO` + `ESTADO_SIAF` + `SIG_ORDEN_INTERFASE` | 3 745 emitidas, 3 801 comprometidas, **ninguna en `'0'`** |
+| 2 · Conformidad | SGCM → SIGA | `FLAG_RECEPCION` + `FECHA_RECEPCION` | 82 de 3 803 órdenes en `'S'` con su fecha |
+| 4 · Devengado | **SIGA → SGCM** | `EXP_SIAF`, `NRO_CERTIFICA` | poblados en 3 801 y 3 803 de 3 803 |
+
+Los hitos 3 y 5 **no se implementan a propósito**: `SIG_DEVENGADO` tiene una
+sola fila en toda la base (2024), `SIG_TES_INTERFASE_CAB` está vacía, las dos
+tablas de penalidades están vacías y `FECHA_CANCEL` no se usa en ninguna orden
+del 2026. **El ANIN devenga y gira en SIAF, no en SIGA.** Escribir ahí sería
+inventar una integración.
+
+**La corrección de fondo.** El hito 4 estaba al revés: Contabilidad teclea el
+N.º de expediente SIAF en nuestra pantalla y SIGA ya lo tiene. Ahora se lee y se
+propone en el campo.
+
+**Qué se construyó.**
+
+| Pieza | Dónde |
+|---|---|
+| Sinónimos `SIG_ORDEN_ADQUISICION` y `SIG_ORDEN_INTERFASE` | `00_servidor/C003` |
+| `siga.vwOrdenServicioSiga`, con `Aprobada = ESTADO '1' + ESTADO_SIAF '2'` | `db/00_ddl/V030` |
+| Estados `PENDIENTE` y `SIMULADO` para los hitos | `db/00_ddl/V031` |
+| `REGISTRAR_RECEPCION_OS` en la cola de integración (dos `CHECK`) | `db/00_ddl/V032` |
+| `paAnotarHito`, `paSincronizarOrdenSiga` (1 y 4), `paEncolarRecepcionOrden` (2) | `db/10_api/F014` |
+| El hito 2 deja de ser un stub y encola | `db/10_api/F012` |
+| `usp_ext_registrar_recepcion_orden` | `SIGA/integracion/`, instalado en `SIGA_1750` |
+| `integracion.paEscribirRecepcionOrden` | `db/15_siga/W004` |
+| `sincronizarOrdenSiga` y la píldora de estado en el detalle | back `PagoController`, front `gestion-pago` |
+
+**Por qué la recepción se encola y la aprobación no se toca.** La recepción es
+un hecho del expediente logístico y tiene columna propia. Aprobar la orden y
+comprometerla en SIAF, no: eso es de Logística dentro de SIGA, tiene permiso por
+usuario —93 personas con la opción de autorización— y el compromiso viaja al MEF
+por `SIG_ORDEN_INTERFASE`. El SGCM **espera y verifica**; no fuerza. Misma línea
+que `FLUJO_CMN_A_REQUERIMIENTO.md` §6.
+
+**El Anexo 11 no replicaba el formato.** Se generaba con secciones inventadas
+—«1. Datos de la prestación», «2. Fechas y atraso»— y un párrafo que la Directiva
+no tiene. Reescrito como réplica de la página 51 de la Directiva 002-2026-ANIN:
+el párrafo de constancia literal, el bloque CONTRATO, los datos del proveedor y
+el entregable, CONFORMIDAD AREA USUARIA con días de atraso y si corresponde
+penalidad, ANOTACIONES/OBSERVACIONES y la postfirma del responsable. Donde el
+dato no existe va la línea en blanco, como en el papel (ESTANDARES §4.7).
+
+Además el acta **no se generaba nunca**: el PDF se armaba dentro del mismo clic
+que movía el expediente, así que nadie llegaba a verlo. Ahora el Jefe del área
+usuaria tiene «Generar Anexo 11», que lo sube al file server, lo registra y lo
+abre en el visor; desde ahí se firma, y el PDF firmado reemplaza al anterior y
+es el que muestra el visor. Igual que en CMN y Requerimiento.
+
+**Lo que queda.** La primera escritura real contra SIGA no se ha ejecutado: todo
+está probado hasta `Modo = simulacion`. Y `S909` no era repetible —su limpieza
+se saltaba documentos, firmas, observaciones y plazos, y moría en
+`FK_sigcm_DocExp_Expediente` en cuanto alguien recorría el flujo de verdad—;
+corregido.
+
 ### 2026-09-03 (tarde) — Las dos transiciones que faltaban y la firma sin dispositivo
 
 **Qué pedía la presentación.** Que el recorrido completo —CMN → requerimiento →
