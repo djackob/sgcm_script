@@ -9,13 +9,11 @@
   Al firmar el Jefe de Abastecimiento el Anexo 4, W001 aprueba en SIGA la
   solicitud de modificacion -SIG_SOLICITUD_MODIFICACION pasa a ESTADO '3' y el
   item vuelve a MOTIVO_SOLICITUD '0', o sea queda pedible- y el expediente
-  regresa al area usuaria: CMN_A4_ENVIADO tiene como responsable a AREA_JEFE y
-  el enrutamiento de F004 lo devuelve a la unidad de origen.
+  FINALIZA (CMN_FINALIZADO). Ya no hay recepcion del jefe del area usuaria.
 
-  La derivacion, entonces, ya existia. Lo que faltaba era avisar. El area
-  usuaria no vive dentro del sistema y su bandeja esta quieta la mayor parte del
-  tiempo: sin correo, la aprobacion que habilita su pedido en SIGA se entera
-  cuando alguien entra a mirar.
+  La derivacion fisica del expediente al AU se omitio; lo que falta es avisar.
+  El area usuaria no vive dentro del sistema: sin correo, la aprobacion que
+  habilita su pedido en SIGA se entera cuando alguien entra a mirar.
 
   POR QUE UN SOBRE Y NO UN ENVIO
   Igual que F011 con el locador: SMTP no corre en SQL Server. Esta rutina arma
@@ -125,7 +123,21 @@ BEGIN
            Los correos vienen del padron del SSO, que es quien los mantiene. Un
            usuario sin correo simplemente no entra en la lista.
            ------------------------------------------------------------------ */
-        DECLARE @Destinatario varchar(400), @Copia varchar(400);
+        /* Destinatario: jefe AU. Copia: puntos focales del area; si no hay
+           ninguno marcado, coordinadores y especialistas (legado). */
+        DECLARE @Destinatario varchar(800), @Copia varchar(800);
+        DECLARE @HayPuntoFocal bit = 0;
+
+        IF COL_LENGTH(N'sigcm.UsuarioRol', N'EsPuntoFocal') IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+                 FROM sigcm.UsuarioRol AS ur
+                WHERE ur.IdUnidad = @IdUnidadOrigen
+                  AND ur.CodigoRol IN ('AREA_COORDINADOR', 'AREA_ESPECIALISTA')
+                  AND ur.Activo = 1
+                  AND ur.EsPuntoFocal = 1
+                  AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE())))
+            SET @HayPuntoFocal = 1;
 
         SELECT @Destinatario = STRING_AGG(CONVERT(varchar(400), x.Correo), ';')
           FROM (SELECT DISTINCT us.Correo
@@ -147,7 +159,12 @@ BEGIN
                    AND ur.Activo    = 1
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()))
                    AND us.Activo = 1
-                   AND NULLIF(LTRIM(RTRIM(us.Correo)), '') IS NOT NULL) AS x;
+                   AND NULLIF(LTRIM(RTRIM(us.Correo)), '') IS NOT NULL
+                   AND (
+                        @HayPuntoFocal = 0
+                        OR (COL_LENGTH(N'sigcm.UsuarioRol', N'EsPuntoFocal') IS NOT NULL
+                            AND ur.EsPuntoFocal = 1)
+                   )) AS x;
 
         IF NULLIF(LTRIM(RTRIM(@Destinatario)), '') IS NULL
             THROW 51904, 'VALIDACION_CORREO: el area usuaria no tiene un jefe con correo registrado en el padron. El expediente ya esta en su bandeja; corrija el correo y reintente el aviso.', 1;
@@ -160,32 +177,35 @@ BEGIN
                @NombreAnexo4    = a4.NombreDocumento
           FROM cmn.fnDocumentoVigente(@IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4;
 
+        DECLARE @o nchar(1) = NCHAR(0x00F3);
+        DECLARE @i nchar(1) = NCHAR(0x00ED);
+        DECLARE @a nchar(1) = NCHAR(0x00E1);
+        DECLARE @e nchar(1) = NCHAR(0x00E9);
+        DECLARE @u nchar(1) = NCHAR(0x00FA);
         DECLARE @Asunto nvarchar(300) = CONCAT(
-            N'Modificación del CMN aprobada — ', @Codigo,
+            N'Modificaci', @o, N'n del CMN aprobada - ', @Codigo,
             CASE WHEN @CodigoAnexo4 IS NULL THEN N''
-                 ELSE CONCAT(N' — Anexo 4 ', @CodigoAnexo4) END);
+                 ELSE CONCAT(N' - Anexo 4 ', @CodigoAnexo4) END);
 
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
             N'<p>Estimado/a Jefe(a) de <b>', @AreaUsuaria, N'</b>:</p>',
-            N'<p>Su solicitud de modificación del Cuadro Multianual de Necesidades ',
+            N'<p>Su solicitud de modificaci', @o, N'n del Cuadro Multianual de Necesidades ',
             N'<b>', @Codigo, N'</b> fue <b>aprobada</b>. El Anexo 4',
             CASE WHEN @CodigoAnexo4 IS NULL THEN N''
                  ELSE CONCAT(N' <b>', @CodigoAnexo4, N'</b>') END,
-            N' está firmado por el Jefe de la Unidad de Abastecimiento y la ',
-            N'modificación ya se registró en el SIGA.</p>',
+            N' est', @a, N' firmado por el Jefe de la Unidad de Abastecimiento y la ',
+            N'modificaci', @o, N'n ya se registr', @o, N' en el SIGA.</p>',
             N'<p><b>Ejercicio:</b> ', CONVERT(varchar(4), @AnoEje), N'<br/>',
             N'<b>Centro de costo:</b> ', @CentroCosto, N'<br/>',
-            N'<b>Tipo de operación:</b> ', ISNULL(@TipoOperacion, N'—'), N'</p>',
-            /* Lo util del aviso no es que el papel se firmo, sino que ya puede
-               pedir: es el paso que en SIGA habilita el item. */
-            N'<p>Con esta aprobación los ítems incluidos quedan <b>disponibles ',
+            N'<b>Tipo de operaci', @o, N'n:</b> ', ISNULL(@TipoOperacion, N'-'), N'</p>',
+            N'<p>Con esta aprobaci', @o, N'n los ', @i, N'tems incluidos quedan <b>disponibles ',
             N'para ser pedidos</b> en el SIGA. Puede registrar su pedido ',
-            N'seleccionándolos del cuadro y, con ese número de pedido, continuar ',
+            N'seleccion', @a, N'ndolos del cuadro y, con ese n', @u, N'mero de pedido, continuar ',
             N'con su requerimiento en el SIGCM.</p>',
-            N'<p>El expediente ya figura en su bandeja de Gestión CMN, donde debe ',
-            N'<b>recepcionar el Anexo 4</b> para cerrarlo.</p>',
+            N'<p>El expediente CMN qued', @o, N' <b>finalizado</b> con la firma del Jefe ',
+            N'de Abastecimiento; no requiere recepci', @o, N'n adicional.</p>',
             N'<p>Se adjunta el Anexo 4 firmado.</p>',
-            N'<p>Autoridad Nacional de Infraestructura — Unidad de Abastecimiento</p>');
+            N'<p>Autoridad Nacional de Infraestructura - Unidad de Abastecimiento</p>');
 
         SELECT @resultado = (
             SELECT 1 AS estado,

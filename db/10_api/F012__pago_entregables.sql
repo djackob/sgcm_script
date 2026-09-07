@@ -419,6 +419,13 @@ BEGIN
              OR (@CodigoRol <> 'PROVEEDOR' AND (
                     @SoloMiBandeja = 0
                  OR e.IdUnidadActual = @IdUnidad
+                 OR e.IdUnidadOrigen = @IdUnidad
+                 OR EXISTS (
+                     SELECT 1
+                       FROM sigcm.Historial AS h
+                      WHERE h.IdExpediente = e.IdExpediente
+                        AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                 )
                 ))
            );
 
@@ -488,6 +495,13 @@ BEGIN
                             OR (@CodigoRol <> 'PROVEEDOR' AND (
                                    @SoloMiBandeja = 0
                                 OR e.IdUnidadActual = @IdUnidad
+                                OR e.IdUnidadOrigen = @IdUnidad
+                                OR EXISTS (
+                                    SELECT 1
+                                      FROM sigcm.Historial AS h
+                                     WHERE h.IdExpediente = e.IdExpediente
+                                       AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                                )
                                ))
                           )
                         /* Primero lo que le toca a este perfil y dentro de cada

@@ -17,6 +17,7 @@
   {
     "Actor": { ... },
     "Requerimiento": {
+      "IdRequerimiento": null,   /* si viene GUID: actualiza; si null: inserta */
       "AnoEje":2026, "SecEjec":1750, "CentroCosto":"01.01",
       "Denominacion":"...",
       "CodigoTipoContratacion":"BIEN",
@@ -107,9 +108,11 @@ BEGIN
                 @Ate varchar(200), @RucSugerido varchar(11),
                 @TieneDisponibilidad bit,
                 @GeneradoDocumentoDisp nvarchar(1000), @NombreDocumentoDisp nvarchar(1000),
-                @Sustento nvarchar(max), @DatosAdicionales nvarchar(max);
+                @Sustento nvarchar(max), @DatosAdicionales nvarchar(max),
+                @IdRequerimientoEntrada uniqueidentifier;
 
-        SELECT @AnoEje                 = AnoEje,
+        SELECT @IdRequerimientoEntrada = TRY_CONVERT(uniqueidentifier, IdRequerimiento),
+               @AnoEje                 = AnoEje,
                @SecEjec                = SecEjec,
                @CentroCosto            = CentroCosto,
                @Denominacion           = Denominacion,
@@ -131,6 +134,7 @@ BEGIN
                @DatosAdicionales       = DatosAdicionales
         FROM OPENJSON(@parametro, '$.Requerimiento')
         WITH (
+            IdRequerimiento        varchar(50),
             AnoEje                 smallint,
             SecEjec                int,
             CentroCosto            varchar(15),
@@ -243,10 +247,11 @@ BEGIN
             IF @MontoLocacion > @MontoTope
             BEGIN
                 DECLARE @errTopeLoc nvarchar(500) = CONCAT(
-                    'VALIDACION_MONTO: el calculo monto mensual x entregables (S/ ',
-                    CONVERT(varchar(30), @MontoLocacion),
+                    'VALIDACION_MONTO: el calculo monto mensual por entregables (S/ ',
+                    FORMAT(@MontoLocacion, 'N2', 'en-US'),
                     ') supera el tope de ocho UIT para ', @AnoEje, ', que es S/ ',
-                    CONVERT(varchar(30), @MontoTope), ' (UIT S/ ', CONVERT(varchar(30), @ValorUit),
+                    FORMAT(@MontoTope, 'N2', 'en-US'), ' (UIT S/ ',
+                    FORMAT(@ValorUit, 'N2', 'en-US'),
                     '). Una contratacion mayor no se tramita por esta via.');
                 THROW 51413, @errTopeLoc, 1;
             END
@@ -255,9 +260,10 @@ BEGIN
         IF @Monto > @MontoTope
         BEGIN
             DECLARE @errTope nvarchar(500) = CONCAT(
-                'VALIDACION_MONTO: el monto S/ ', CONVERT(varchar(30), @Monto),
+                'VALIDACION_MONTO: el monto S/ ', FORMAT(@Monto, 'N2', 'en-US'),
                 ' supera el tope de ocho UIT para ', @AnoEje, ', que es S/ ',
-                CONVERT(varchar(30), @MontoTope), ' (UIT S/ ', CONVERT(varchar(30), @ValorUit),
+                FORMAT(@MontoTope, 'N2', 'en-US'), ' (UIT S/ ',
+                FORMAT(@ValorUit, 'N2', 'en-US'),
                 '). Una contratacion mayor no se tramita por esta via.');
             THROW 51413, @errTope, 1;
         END
@@ -466,116 +472,244 @@ BEGIN
         END
 
         /* ---- Escritura ------------------------------------------------ */
-        DECLARE @CodigoEstadoInicial varchar(60);
-        SELECT @CodigoEstadoInicial = CodigoEstado
-          FROM sigcm.Estado
-         WHERE CodigoModulo = 'REQUERIMIENTO' AND EsInicial = 1 AND Activo = 1;
-
-        IF @CodigoEstadoInicial IS NULL
-            THROW 51427, 'CONFLICTO_CONFIGURACION: el modulo REQUERIMIENTO no tiene estado inicial. Falta ejecutar S003.', 1;
-
-        DECLARE @Codigo varchar(40);
-        DECLARE @AreaNumerica varchar(20) =
-            REPLACE(REPLACE(LTRIM(RTRIM(@CentroCosto)), '.', ''), ' ', '');
-        DECLARE @IdUsuarioNumerico int;
-        SELECT @IdUsuarioNumerico = IdUsuarioSso
-          FROM sigcm.Usuario WHERE IdUsuario = @IdUsuario;
-        IF @IdUsuarioNumerico IS NULL OR @IdUsuarioNumerico <= 0
-            SET @IdUsuarioNumerico = (ABS(CHECKSUM(CONVERT(varchar(36), @IdUsuario))) % 900) + 100;
-
-        EXEC sigcm.paSiguienteCodigo
-             'REQ', @AnoEje, N'requerimiento.SeqRequerimiento', @Codigo OUTPUT,
-             @AreaNumerica, @IdUsuarioNumerico;
-
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @IdExpediente uniqueidentifier, @IdRequerimiento uniqueidentifier;
+        DECLARE @Codigo varchar(40);
+        DECLARE @CodigoEstadoActual varchar(60);
+        DECLARE @VersionExpediente int;
+        DECLARE @EsActualizacion bit = 0;
+        DECLARE @PedidoNuevo TABLE (IdRequerimientoPedido uniqueidentifier, NumeroPedido varchar(20));
 
         BEGIN TRANSACTION;
 
-        INSERT INTO sigcm.Expediente
-            (Codigo, CodigoModulo, CodigoTipoContratacion, AnoEje, IdUnidadOrigen,
-             CodigoEstado, IdUnidadActual, IdResponsableActual, Version,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@Codigo, 'REQUERIMIENTO', @CodigoTipoContratacion, @AnoEje, @IdUnidad,
-             @CodigoEstadoInicial, @IdUnidad, @IdUsuario, 1,
-             @Cuenta, @Ahora, @Equipo, @Programa);
+        IF @IdRequerimientoEntrada IS NOT NULL
+        BEGIN
+            /* Edicion / subsanacion: NO se crea expediente ni codigo nuevo. */
+            SET @EsActualizacion = 1;
+            SET @IdRequerimiento = @IdRequerimientoEntrada;
 
-        SELECT @IdExpediente = IdExpediente FROM sigcm.Expediente WHERE Codigo = @Codigo;
+            SELECT @IdExpediente = r.IdExpediente,
+                   @Codigo = r.Codigo,
+                   @CodigoEstadoActual = e.CodigoEstado,
+                   @VersionExpediente = e.Version
+              FROM requerimiento.Requerimiento AS r
+              JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
+             WHERE r.IdRequerimiento = @IdRequerimiento
+               AND r.Activo = 1
+               AND e.Anulado = 0
+               AND e.Activo = 1;
 
-        INSERT INTO requerimiento.Requerimiento
-            (IdExpediente, Codigo, AnoEje, SecEjec, CentroCosto, Denominacion,
-             CodigoTipoContratacion, CodigoDec, CondicionCmn, IdSolicitudCmn,
-             GeneradoDocumentoCmn, NombreDocumentoCmn, Monto, PlazoDias,
-             FechaInicioPrevisto, Ate, RucSugerido, TieneDisponibilidad,
-             GeneradoDocumentoDisponibilidad, NombreDocumentoDisponibilidad,
-             Sustento, IdResponsable, DatosAdicionales,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@IdExpediente, @Codigo, @AnoEje, @SecEjec, @CentroCosto, @Denominacion,
-             @CodigoTipoContratacion, @CodigoDec, @CondicionCmn, @IdSolicitudCmn,
-             @GeneradoDocumentoCmn, @NombreDocumentoCmn, @Monto, @PlazoDias,
-             @FechaInicioPrevisto, @Ate, @RucSugerido, @TieneDisponibilidad,
-             @GeneradoDocumentoDisp, @NombreDocumentoDisp,
-             @Sustento, @IdUsuario, @DatosAdicionales,
-             @Cuenta, @Ahora, @Equipo, @Programa);
+            IF @IdExpediente IS NULL
+                THROW 51428, 'NO_ENCONTRADO: el requerimiento a editar no existe o esta anulado.', 1;
 
-        SELECT @IdRequerimiento = IdRequerimiento
-          FROM requerimiento.Requerimiento WHERE IdExpediente = @IdExpediente;
+            /* REQ_DOC_PENDIENTE: tras Observar (Coordinador/Jefe), SUBSANAR
+               deja el expediente listo para Firma especialista; el Especialista
+               puede seguir ajustando anexos antes de firmar (S023). */
+            IF @CodigoEstadoActual NOT IN ('REQ_BORRADOR', 'REQ_OBSERVADO', 'REQ_DOC_PENDIENTE')
+            BEGIN
+                DECLARE @errEstadoEd nvarchar(400) = CONCAT(
+                    'CONFLICTO_ESTADO: el requerimiento ', @Codigo,
+                    ' esta en ', @CodigoEstadoActual,
+                    ' y solo puede editarse en REQ_BORRADOR, REQ_OBSERVADO o REQ_DOC_PENDIENTE.');
+                THROW 51429, @errEstadoEd, 1;
+            END
 
-        /* Los pedidos primero: los items pueden referenciarlos por su orden. */
-        DECLARE @PedidoNuevo TABLE (IdRequerimientoPedido uniqueidentifier, NumeroPedido varchar(20));
+            UPDATE requerimiento.Requerimiento
+               SET Denominacion = @Denominacion,
+                   CodigoTipoContratacion = @CodigoTipoContratacion,
+                   CodigoDec = @CodigoDec,
+                   CondicionCmn = @CondicionCmn,
+                   IdSolicitudCmn = @IdSolicitudCmn,
+                   GeneradoDocumentoCmn = @GeneradoDocumentoCmn,
+                   NombreDocumentoCmn = @NombreDocumentoCmn,
+                   Monto = @Monto,
+                   PlazoDias = @PlazoDias,
+                   FechaInicioPrevisto = @FechaInicioPrevisto,
+                   Ate = @Ate,
+                   RucSugerido = @RucSugerido,
+                   TieneDisponibilidad = @TieneDisponibilidad,
+                   GeneradoDocumentoDisponibilidad = @GeneradoDocumentoDisp,
+                   NombreDocumentoDisponibilidad = @NombreDocumentoDisp,
+                   Sustento = @Sustento,
+                   DatosAdicionales = @DatosAdicionales,
+                   UsuarioModificacionAuditoria = @Cuenta,
+                   FechaModificacionAuditoria = @Ahora,
+                   EquipoModificacionAuditoria = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdRequerimiento = @IdRequerimiento;
 
-        INSERT INTO requerimiento.RequerimientoPedido
-            (IdRequerimiento, AnoEje, SecEjec, NumeroPedido, SecPedido, FechaPedido,
-             CentroCosto, SecFunc, Origen, FuenteFinanc, Clasificador, Verificado,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        OUTPUT inserted.IdRequerimientoPedido, inserted.NumeroPedido INTO @PedidoNuevo
-        SELECT @IdRequerimiento, p.AnoEje, p.SecEjec, p.NumeroPedido, p.SecPedido, p.FechaPedido,
-               p.CentroCosto, p.SecFunc, p.Origen, p.FuenteFinanc, p.Clasificador, 0,
-               @Cuenta, @Ahora, @Equipo, @Programa
-          FROM #Pedido AS p;
+            UPDATE sigcm.Expediente
+               SET CodigoTipoContratacion = @CodigoTipoContratacion,
+                   UsuarioModificacionAuditoria = @Cuenta,
+                   FechaModificacionAuditoria = @Ahora,
+                   EquipoModificacionAuditoria = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdExpediente = @IdExpediente;
 
-        UPDATE p SET p.IdPedidoNuevo = n.IdRequerimientoPedido
-          FROM #Pedido AS p JOIN @PedidoNuevo AS n ON n.NumeroPedido = p.NumeroPedido;
+            /* Pedidos e items se reemplazan. Se borran (no soft-delete) porque
+               UQ_req_Pedido_Numero es (IdRequerimiento, AnoEje, NumeroPedido)
+               sin filtrar por Activo: reinsertar el mismo pedido chocaria. */
+            DELETE FROM requerimiento.RequerimientoItem
+             WHERE IdRequerimiento = @IdRequerimiento;
 
-        INSERT INTO requerimiento.RequerimientoItem
-            (IdRequerimiento, IdRequerimientoPedido, Orden, TipoBien, GrupoBien,
-             ClaseBien, FamiliaBien, ItemBien, DescripcionServicio, UnidadMedida,
-             Cantidad, PrecioUnitario,
-             UsuarioCreacionAuditoria, FechaCreacionAuditoria,
-             EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        SELECT @IdRequerimiento, p.IdPedidoNuevo, i.Orden, i.TipoBien, i.GrupoBien,
-               i.ClaseBien, i.FamiliaBien, i.ItemBien, i.DescripcionServicio, i.UnidadMedida,
-               i.Cantidad, i.PrecioUnitario,
-               @Cuenta, @Ahora, @Equipo, @Programa
-          FROM #Item AS i
-          LEFT JOIN #Pedido AS p ON p.Orden = i.OrdenPedido;
+            DELETE FROM requerimiento.RequerimientoPedido
+             WHERE IdRequerimiento = @IdRequerimiento;
 
-        INSERT INTO sigcm.Historial
-            (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
-             Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
-             UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
-        VALUES
-            (@IdExpediente, NULL, @CodigoEstadoInicial, NULL,
-             'Registro inicial del requerimiento', @IdUsuario, @CodigoRol, @IdUnidad,
-             (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto,
-                     @CodigoTipoContratacion AS TipoContratacion, @CodigoDec AS Dec
-                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
-             @Cuenta, @Equipo, @Programa);
+            INSERT INTO requerimiento.RequerimientoPedido
+                (IdRequerimiento, AnoEje, SecEjec, NumeroPedido, SecPedido, FechaPedido,
+                 CentroCosto, SecFunc, Origen, FuenteFinanc, Clasificador, Verificado,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            OUTPUT inserted.IdRequerimientoPedido, inserted.NumeroPedido INTO @PedidoNuevo
+            SELECT @IdRequerimiento, p.AnoEje, p.SecEjec, p.NumeroPedido, p.SecPedido, p.FechaPedido,
+                   p.CentroCosto, p.SecFunc, p.Origen, p.FuenteFinanc, p.Clasificador, 0,
+                   @Cuenta, @Ahora, @Equipo, @Programa
+              FROM #Pedido AS p;
+
+            UPDATE p SET p.IdPedidoNuevo = n.IdRequerimientoPedido
+              FROM #Pedido AS p JOIN @PedidoNuevo AS n ON n.NumeroPedido = p.NumeroPedido;
+
+            INSERT INTO requerimiento.RequerimientoItem
+                (IdRequerimiento, IdRequerimientoPedido, Orden, TipoBien, GrupoBien,
+                 ClaseBien, FamiliaBien, ItemBien, DescripcionServicio, UnidadMedida,
+                 Cantidad, PrecioUnitario,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            SELECT @IdRequerimiento, p.IdPedidoNuevo, i.Orden, i.TipoBien, i.GrupoBien,
+                   i.ClaseBien, i.FamiliaBien, i.ItemBien, i.DescripcionServicio, i.UnidadMedida,
+                   i.Cantidad, i.PrecioUnitario,
+                   @Cuenta, @Ahora, @Equipo, @Programa
+              FROM #Item AS i
+              LEFT JOIN #Pedido AS p ON p.Orden = i.OrdenPedido;
+
+            INSERT INTO sigcm.Historial
+                (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
+                 Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
+                 UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@IdExpediente, @CodigoEstadoActual, @CodigoEstadoActual, NULL,
+                 'Actualizacion del requerimiento (Anexo 5 / datos de registro)',
+                 @IdUsuario, @CodigoRol, @IdUnidad,
+                 (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto,
+                         @CodigoTipoContratacion AS TipoContratacion, @CodigoDec AS Dec
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                 @Cuenta, @Equipo, @Programa);
+        END
+        ELSE
+        BEGIN
+            DECLARE @CodigoEstadoInicial varchar(60);
+            SELECT @CodigoEstadoInicial = CodigoEstado
+              FROM sigcm.Estado
+             WHERE CodigoModulo = 'REQUERIMIENTO' AND EsInicial = 1 AND Activo = 1;
+
+            IF @CodigoEstadoInicial IS NULL
+                THROW 51427, 'CONFLICTO_CONFIGURACION: el modulo REQUERIMIENTO no tiene estado inicial. Falta ejecutar S003.', 1;
+
+            SET @CodigoEstadoActual = @CodigoEstadoInicial;
+
+            DECLARE @AreaNumerica varchar(20) =
+                REPLACE(REPLACE(LTRIM(RTRIM(@CentroCosto)), '.', ''), ' ', '');
+            DECLARE @IdUsuarioNumerico int;
+            SELECT @IdUsuarioNumerico = IdUsuarioSso
+              FROM sigcm.Usuario WHERE IdUsuario = @IdUsuario;
+            IF @IdUsuarioNumerico IS NULL OR @IdUsuarioNumerico <= 0
+                SET @IdUsuarioNumerico = (ABS(CHECKSUM(CONVERT(varchar(36), @IdUsuario))) % 900) + 100;
+
+            EXEC sigcm.paSiguienteCodigo
+                 'REQ', @AnoEje, N'requerimiento.SeqRequerimiento', @Codigo OUTPUT,
+                 @AreaNumerica, @IdUsuarioNumerico;
+
+            SET @VersionExpediente = 1;
+
+            INSERT INTO sigcm.Expediente
+                (Codigo, CodigoModulo, CodigoTipoContratacion, AnoEje, IdUnidadOrigen,
+                 CodigoEstado, IdUnidadActual, IdResponsableActual, Version,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@Codigo, 'REQUERIMIENTO', @CodigoTipoContratacion, @AnoEje, @IdUnidad,
+                 @CodigoEstadoInicial, @IdUnidad, @IdUsuario, 1,
+                 @Cuenta, @Ahora, @Equipo, @Programa);
+
+            SELECT @IdExpediente = IdExpediente FROM sigcm.Expediente WHERE Codigo = @Codigo;
+
+            INSERT INTO requerimiento.Requerimiento
+                (IdExpediente, Codigo, AnoEje, SecEjec, CentroCosto, Denominacion,
+                 CodigoTipoContratacion, CodigoDec, CondicionCmn, IdSolicitudCmn,
+                 GeneradoDocumentoCmn, NombreDocumentoCmn, Monto, PlazoDias,
+                 FechaInicioPrevisto, Ate, RucSugerido, TieneDisponibilidad,
+                 GeneradoDocumentoDisponibilidad, NombreDocumentoDisponibilidad,
+                 Sustento, IdResponsable, DatosAdicionales,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@IdExpediente, @Codigo, @AnoEje, @SecEjec, @CentroCosto, @Denominacion,
+                 @CodigoTipoContratacion, @CodigoDec, @CondicionCmn, @IdSolicitudCmn,
+                 @GeneradoDocumentoCmn, @NombreDocumentoCmn, @Monto, @PlazoDias,
+                 @FechaInicioPrevisto, @Ate, @RucSugerido, @TieneDisponibilidad,
+                 @GeneradoDocumentoDisp, @NombreDocumentoDisp,
+                 @Sustento, @IdUsuario, @DatosAdicionales,
+                 @Cuenta, @Ahora, @Equipo, @Programa);
+
+            SELECT @IdRequerimiento = IdRequerimiento
+              FROM requerimiento.Requerimiento WHERE IdExpediente = @IdExpediente;
+
+            INSERT INTO requerimiento.RequerimientoPedido
+                (IdRequerimiento, AnoEje, SecEjec, NumeroPedido, SecPedido, FechaPedido,
+                 CentroCosto, SecFunc, Origen, FuenteFinanc, Clasificador, Verificado,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            OUTPUT inserted.IdRequerimientoPedido, inserted.NumeroPedido INTO @PedidoNuevo
+            SELECT @IdRequerimiento, p.AnoEje, p.SecEjec, p.NumeroPedido, p.SecPedido, p.FechaPedido,
+                   p.CentroCosto, p.SecFunc, p.Origen, p.FuenteFinanc, p.Clasificador, 0,
+                   @Cuenta, @Ahora, @Equipo, @Programa
+              FROM #Pedido AS p;
+
+            UPDATE p SET p.IdPedidoNuevo = n.IdRequerimientoPedido
+              FROM #Pedido AS p JOIN @PedidoNuevo AS n ON n.NumeroPedido = p.NumeroPedido;
+
+            INSERT INTO requerimiento.RequerimientoItem
+                (IdRequerimiento, IdRequerimientoPedido, Orden, TipoBien, GrupoBien,
+                 ClaseBien, FamiliaBien, ItemBien, DescripcionServicio, UnidadMedida,
+                 Cantidad, PrecioUnitario,
+                 UsuarioCreacionAuditoria, FechaCreacionAuditoria,
+                 EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            SELECT @IdRequerimiento, p.IdPedidoNuevo, i.Orden, i.TipoBien, i.GrupoBien,
+                   i.ClaseBien, i.FamiliaBien, i.ItemBien, i.DescripcionServicio, i.UnidadMedida,
+                   i.Cantidad, i.PrecioUnitario,
+                   @Cuenta, @Ahora, @Equipo, @Programa
+              FROM #Item AS i
+              LEFT JOIN #Pedido AS p ON p.Orden = i.OrdenPedido;
+
+            INSERT INTO sigcm.Historial
+                (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
+                 Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
+                 UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@IdExpediente, NULL, @CodigoEstadoInicial, NULL,
+                 'Registro inicial del requerimiento', @IdUsuario, @CodigoRol, @IdUnidad,
+                 (SELECT @Codigo AS Codigo, @CentroCosto AS CentroCosto,
+                         @CodigoTipoContratacion AS TipoContratacion, @CodigoDec AS Dec
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                 @Cuenta, @Equipo, @Programa);
+        END
 
         COMMIT TRANSACTION;
 
         DECLARE @Items int = (SELECT COUNT(*) FROM #Item);
         DECLARE @Pedidos int = (SELECT COUNT(*) FROM #Pedido);
+        DECLARE @AccionAuditoria varchar(20) =
+            CASE WHEN @EsActualizacion = 1 THEN 'ACTUALIZAR' ELSE 'REGISTRAR' END;
+        DECLARE @MensajeOk nvarchar(200) =
+            CASE WHEN @EsActualizacion = 1
+                 THEN N'Se actualizo el requerimiento satisfactoriamente.'
+                 ELSE N'Se realizo el registro satisfactoriamente.'
+            END;
 
         EXEC sigcm.paRegistrarAuditoria
              @CorrelacionId = @CorrelacionId, @CodigoModulo = 'REQUERIMIENTO',
              @Entidad = 'requerimiento.Requerimiento', @IdEntidad = @IdRequerimiento,
-             @Accion = 'REGISTRAR', @Resultado = 'OK',
+             @Accion = @AccionAuditoria, @Resultado = 'OK',
              @IdActor = @IdUsuario, @ActorCuenta = @Cuenta, @ActorRol = @CodigoRol,
              @IdActorUnidad = @IdUnidad, @OrigenIp = @Ip, @Equipo = @Equipo,
              @Programa = @Programa;
@@ -585,13 +719,13 @@ BEGIN
                    @IdRequerimiento AS IdRequerimiento,
                    @IdExpediente    AS IdExpediente,
                    @Codigo          AS Codigo,
-                   @CodigoEstadoInicial AS CodigoEstado,
-                   1 AS Version,
+                   @CodigoEstadoActual AS CodigoEstado,
+                   @VersionExpediente AS Version,
                    @Items   AS Items,
                    @Pedidos AS Pedidos,
                    @Monto   AS Monto,
                    @MontoTope AS MontoTope,
-                   N'Se realizo el registro satisfactoriamente.' AS mensaje
+                   @MensajeOk AS mensaje
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
         SELECT @resultado;
@@ -671,6 +805,12 @@ BEGIN
                    e.IdExpediente, e.CodigoEstado, e.Version, e.Anulado,
                    Estado = w.Nombre,
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
+                   /* Jefe del area de origen: va impreso en el Anexo 3 al
+                      elaborarlo el Especialista. Si se dejara en blanco, al
+                      firmar el Jefe el PDF ya estaria sellado y no podria
+                      regenerarse con su nombre. */
+                   JefeAreaUsuaria = cmn.fnNombreJefeArea(
+                       COALESCE(e.IdUnidadOrigen, un.IdUnidad)),
                    CentroCostoNombre = ISNULL(un.Nombre, r.CentroCosto),
                    /* Si se apoya en una modificacion del CMN, se devuelve su
                       codigo: el visor la muestra sin una segunda consulta. */
@@ -759,7 +899,11 @@ GO
 
 /*
   Bandeja del modulo, con el mismo criterio que la de CMN: por defecto muestra
-  lo que esta en la unidad del actor Y cuyo estado tiene como responsable su rol.
+  lo que esta en la unidad del actor, lo que el area origino y lo que este actor
+  (o su unidad) ya derivo. El rol no oculta filas. El listado se ordena por
+  expediente mas reciente (creacion DESC) y, a igualdad, por ultima modificacion.
+  Al enviar un expediente deja de estar en IdUnidadActual, pero no debe
+  desaparecer del listado de quien lo tramite.
 
   Cada fila trae Transiciones: las mismas que sigcm.paListarTransicionDisponible
   para ese expediente y este actor. La bandeja pinta los botones de accion con
@@ -769,7 +913,9 @@ GO
   { "Actor": {...},
     "Filtro": { "SoloMiBandeja":true, "CodigoEstado":null, "AnoEje":2026,
                 "CentroCosto":null, "CodigoTipoContratacion":null,
-                "Texto":null, "Limite":50, "Desplazamiento":0 } }
+                "Texto":null, "limit":10, "offset":0 } }
+  /* Tambien acepta Limite/Desplazamiento (alias historico).
+     limit: multiplo de 10 entre 10 y 200. offset: multiplo de limit. */
 */
 CREATE OR ALTER PROCEDURE requerimiento.paListarRequerimiento
     @parametro nvarchar(max)
@@ -800,7 +946,8 @@ BEGIN
 
         DECLARE @SoloMiBandeja bit, @CodigoEstado varchar(60), @AnoEje smallint,
                 @CentroCosto varchar(15), @CodigoTipoContratacion varchar(20),
-                @Texto varchar(200), @Limite int, @Desplazamiento int;
+                @Texto varchar(200), @Limite int, @Desplazamiento int,
+                @LimiteAlias int, @OffsetAlias int;
 
         SELECT @SoloMiBandeja          = ISNULL(SoloMiBandeja, 1),
                @CodigoEstado           = CodigoEstado,
@@ -809,7 +956,9 @@ BEGIN
                @CodigoTipoContratacion = CodigoTipoContratacion,
                @Texto                  = Texto,
                @Limite                 = Limite,
-               @Desplazamiento         = Desplazamiento
+               @LimiteAlias            = LimitFila,
+               @Desplazamiento         = Desplazamiento,
+               @OffsetAlias            = OffsetFila
         FROM OPENJSON(@parametro, '$.Filtro')
         WITH (
             SoloMiBandeja          bit,
@@ -818,15 +967,26 @@ BEGIN
             CentroCosto            varchar(15),
             CodigoTipoContratacion varchar(20),
             Texto                  varchar(200),
-            Limite                 int,
-            Desplazamiento         int
+            Limite                 int          '$.Limite',
+            LimitFila              int          '$.limit',
+            Desplazamiento         int          '$.Desplazamiento',
+            OffsetFila             int          '$.offset'
         );
 
         SET @SoloMiBandeja  = ISNULL(@SoloMiBandeja, 1);
-        SET @Limite         = CASE WHEN @Limite IS NULL OR @Limite <= 0 THEN 50
-                                   WHEN @Limite > 200 THEN 200 ELSE @Limite END;
-        SET @Desplazamiento = CASE WHEN @Desplazamiento IS NULL OR @Desplazamiento < 0
-                                   THEN 0 ELSE @Desplazamiento END;
+        SET @Limite = COALESCE(@Limite, @LimiteAlias, 10);
+        SET @Desplazamiento = COALESCE(@Desplazamiento, @OffsetAlias, 0);
+
+        /* limit: multiplo de 10 entre 10 y 200. */
+        IF @Limite < 10 SET @Limite = 10;
+        IF @Limite > 200 SET @Limite = 200;
+        SET @Limite = (@Limite / 10) * 10;
+        IF @Limite < 10 SET @Limite = 10;
+
+        /* offset: no negativo y alineado al tamano de pagina. */
+        IF @Desplazamiento IS NULL OR @Desplazamiento < 0
+            SET @Desplazamiento = 0;
+        SET @Desplazamiento = (@Desplazamiento / @Limite) * @Limite;
 
         DECLARE @Total int;
 
@@ -835,8 +995,17 @@ BEGIN
           JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
           JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
          WHERE e.Anulado = 0 AND e.Activo = 1 AND r.Activo = 1
-           AND (@SoloMiBandeja = 0
-                OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
+           AND (
+                @SoloMiBandeja = 0
+                OR e.IdUnidadActual = @IdUnidad
+                OR e.IdUnidadOrigen = @IdUnidad
+                OR EXISTS (
+                    SELECT 1
+                      FROM sigcm.Historial AS h
+                     WHERE h.IdExpediente = e.IdExpediente
+                       AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                )
+           )
            AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
            AND (@AnoEje       IS NULL OR r.AnoEje       = @AnoEje)
            AND (@CentroCosto  IS NULL OR r.CentroCosto  = @CentroCosto)
@@ -848,7 +1017,9 @@ BEGIN
             SELECT 1 AS estado,
                    @Total          AS total,
                    @Limite         AS limite,
+                   @Limite         AS [limit],
                    @Desplazamiento AS desplazamiento,
+                   @Desplazamiento AS [offset],
                    Requerimientos = JSON_QUERY(COALESCE((
                        SELECT r.IdRequerimiento, r.Codigo, r.AnoEje, r.CentroCosto,
                               r.Denominacion, r.CodigoTipoContratacion,
@@ -924,15 +1095,25 @@ BEGIN
                               ORDER BY d.FechaCreacionAuditoria DESC
                          ) AS doc
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND r.Activo = 1
-                          AND (@SoloMiBandeja = 0
-                               OR (e.IdUnidadActual = @IdUnidad AND w.RolResponsable = @CodigoRol))
+                          AND (
+                               @SoloMiBandeja = 0
+                               OR e.IdUnidadActual = @IdUnidad
+                               OR e.IdUnidadOrigen = @IdUnidad
+                               OR EXISTS (
+                                   SELECT 1
+                                     FROM sigcm.Historial AS h
+                                    WHERE h.IdExpediente = e.IdExpediente
+                                      AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                               )
+                          )
                           AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
                           AND (@AnoEje       IS NULL OR r.AnoEje       = @AnoEje)
                           AND (@CentroCosto  IS NULL OR r.CentroCosto  = @CentroCosto)
                           AND (@CodigoTipoContratacion IS NULL OR r.CodigoTipoContratacion = @CodigoTipoContratacion)
                           AND (@Texto        IS NULL OR r.Codigo LIKE '%' + @Texto + '%'
                                                      OR r.Denominacion LIKE '%' + @Texto + '%')
-                        ORDER BY ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
+                        ORDER BY e.FechaCreacionAuditoria DESC,
+                                 ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),
                    'OK' AS mensaje

@@ -215,8 +215,8 @@ INSERT INTO @Estado VALUES
   ('CMN_A4_FIRMA_COORD',  'Anexo 4 por firmar - Coordinador de Abastecimiento', 80, 0, 0, 'ABAST_COORDINADOR'),
   ('CMN_A4_FIRMA_JEFE',   'Anexo 4 por firmar - Jefe de Abastecimiento',        85, 0, 0, 'ABAST_JEFE'),
 
-  ('CMN_A4_ENVIADO',      'Anexo 4 enviado al area usuaria',                   100, 0, 0, 'AREA_JEFE'),
-  ('CMN_FINALIZADO',      'Anexo 4 recepcionado - Fin',                        110, 0, 1, NULL),
+  ('CMN_A4_ENVIADO',      'Anexo 4 enviado (legado - sin recepcion)',           100, 0, 0, 'AREA_JEFE'),
+  ('CMN_FINALIZADO',      'Anexo 4 firmado y aprobado en SIGA - Fin',          110, 0, 1, NULL),
   ('CMN_ANULADO',         'Anulado',                                           999, 0, 1, NULL);
 
 UPDATE d
@@ -543,19 +543,15 @@ INSERT INTO @Tr VALUES
      el "multiple registro de aprobaciones" del flujo: un Anexo 4 con cinco
      Anexos 3 produce cinco aprobaciones en SIGA, una por area usuaria.
 
-     El destino es CMN_A4_ENVIADO y no un estado intermedio de firmado: el flujo
-     pide que tras la firma del jefe el expediente pase automaticamente al jefe
-     del area usuaria. Un estado intermedio obligaria a un clic mas que nadie
-     pidio. */
-  ('CMN_ABAST_JEFE_FIRMAR_A4', 'CMN_A4_FIRMA_JEFE', 'CMN_A4_ENVIADO',
-   'Firmar el Anexo 4, aprobar en SIGA y remitir al area usuaria', 0, 1,
+     El expediente FINALIZA con esta firma: no hay recepcion del jefe del area
+     usuaria. El aviso al AU es por correo (F013); CONSOLIDAR_CMN queda en cola. */
+  ('CMN_ABAST_JEFE_FIRMAR_A4', 'CMN_A4_FIRMA_JEFE', 'CMN_FINALIZADO',
+   'Firmar el Anexo 4, aprobar en SIGA y finalizar', 0, 1,
    'CMN_ANEXO_4_APROBACION_MODIFICACION', 1, 'CONSOLIDAR_CMN', 0, 'ABAST_JEFE'),
 
-  /* Unica transicion sin RolFirmaRequerida entre las que exigen documento: al
-     recepcionar, el Anexo 4 ya debe estar firmado por el jefe de Abastecimiento. */
-  ('CMN_RECEPCIONAR_A4', 'CMN_A4_ENVIADO', 'CMN_FINALIZADO',
-   'Recepcionar Anexo 4', 0, 0,
-   'CMN_ANEXO_4_APROBACION_MODIFICACION', 0, NULL, 0, NULL),
+  /* CMN_RECEPCIONAR_A4 retirada (S020): el expediente cierra con la firma del
+     jefe de Abastecimiento. Si queda en la tabla, el bloque de retiros abajo
+     la deja Activo=0. */
 
   /* ---------------------------------------------------------------------- */
   /* Anulacion                                                              */
@@ -647,7 +643,6 @@ INSERT INTO @TrRol VALUES
   /* Anexo 4 */
   ('CMN_GENERAR_A4','ABAST_ESPECIALISTA'),
   ('CMN_ABAST_JEFE_FIRMAR_A4','ABAST_JEFE'),
-  ('CMN_RECEPCIONAR_A4','AREA_JEFE'),
 
   /* Anulacion */
   ('CMN_ANULAR_BORRADOR','AREA_ESPECIALISTA'), ('CMN_ANULAR_BORRADOR','AREA_COORDINADOR'),

@@ -1032,14 +1032,20 @@ GO
   sistema", dos extremos sin punto medio, y marcado escondia el resto del
   trabajo de la propia oficina: el jefe no veia lo que su especialista tenia sin
   atender hasta que le llegaba. La condicion por rol no desaparecio, se movio a
-  la columna MeToca y al ORDER BY: ahora lo pendiente para este perfil se marca
-  y sube al inicio, en vez de ser lo unico visible. Es el modelo de una bandeja
-  de correo, que fue lo que el negocio pidio, y por eso el check se retiro de la
-  pantalla.
+  la columna MeToca: ahora lo pendiente para este perfil se marca en la fila,
+  en vez de ser lo unico visible. El listado se ordena por expediente mas
+  reciente (creacion DESC) y, a igualdad, por ultima modificacion, para todas
+  las bandejas. Es el modelo de una bandeja de correo, que fue lo que el
+  negocio pidio, y por eso el check se retiro de la pantalla.
 
   La visibilidad no se amplio fuera de la unidad, y actuar sigue siendo cosa del
   rol: Transiciones y PuedeEditar se calculan igual que antes, de modo que una
   fila que no le corresponde a este perfil llega sin acciones.
+
+  Ademas de lo que esta en la oficina, la bandeja incluye lo que el area origino
+  y lo que este actor (o su unidad) ya derivo: al enviar un expediente deja de
+  estar en IdUnidadActual, pero no debe desaparecer del listado de quien lo
+  tramite. Las acciones siguen saliendo vacias si ya no le toca.
 
   Cada fila trae Transiciones: las mismas que sigcm.paListarTransicionDisponible
   para ese expediente y este actor. La bandeja pinta los botones de accion con
@@ -1113,7 +1119,17 @@ BEGIN
           JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
           JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
          WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
-           AND (@SoloMiBandeja = 0 OR e.IdUnidadActual = @IdUnidad)
+           AND (
+                @SoloMiBandeja = 0
+                OR e.IdUnidadActual = @IdUnidad
+                OR e.IdUnidadOrigen = @IdUnidad
+                OR EXISTS (
+                    SELECT 1
+                      FROM sigcm.Historial AS h
+                     WHERE h.IdExpediente = e.IdExpediente
+                       AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                )
+           )
            AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
            AND (@AnoEje       IS NULL OR s.AnoEje       = @AnoEje)
            AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
@@ -1226,22 +1242,26 @@ BEGIN
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION') AS a4
                          OUTER APPLY cmn.fnDocumentoVigente(e.IdExpediente, N'CMN_SUSTENTO_URGENCIA') AS su
                         WHERE e.Anulado = 0 AND e.Activo = 1 AND s.Activo = 1
-                          AND (@SoloMiBandeja = 0 OR e.IdUnidadActual = @IdUnidad)
+                          AND (
+                               @SoloMiBandeja = 0
+                               OR e.IdUnidadActual = @IdUnidad
+                               OR e.IdUnidadOrigen = @IdUnidad
+                               OR EXISTS (
+                                   SELECT 1
+                                     FROM sigcm.Historial AS h
+                                    WHERE h.IdExpediente = e.IdExpediente
+                                      AND (h.IdActor = @IdUsuario OR h.IdActorUnidad = @IdUnidad)
+                               )
+                          )
                           AND (@CodigoEstado IS NULL OR e.CodigoEstado = @CodigoEstado)
                           AND (@AnoEje       IS NULL OR s.AnoEje       = @AnoEje)
                           AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
                           AND (@Texto        IS NULL OR s.Codigo LIKE '%' + @Texto + '%'
                                                      OR s.Sustento LIKE '%' + @Texto + '%')
-                        /* Primero lo que le toca a este perfil, y dentro de cada
-                           grupo lo mas reciente. El orden es del servidor y no
-                           del navegador porque la bandeja pagina: ordenar en el
-                           cliente solo reacomodaria la pagina que ya llego y
-                           dejaria lo pendiente escondido en la pagina 3. */
-                        ORDER BY CASE
-                                     WHEN e.IdUnidadActual = @IdUnidad
-                                      AND w.RolResponsable = @CodigoRol THEN 0
-                                     ELSE 1
-                                 END,
+                        /* Mas reciente primero (creacion), luego ultima
+                           modificacion. El orden es del servidor y no del
+                           navegador porque la bandeja pagina. */
+                        ORDER BY e.FechaCreacionAuditoria DESC,
                                  ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),

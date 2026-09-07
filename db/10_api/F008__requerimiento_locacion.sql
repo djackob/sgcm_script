@@ -932,14 +932,19 @@ BEGIN
             JSON_QUERY(@Datos, '$.Proveedores[0]'),
             JSON_QUERY(@Datos, '$.Proveedor'));
 
-        DECLARE @Asunto nvarchar(300) = CONCAT(N'Orden de servicio ', ISNULL(@NumeroOrden, @Codigo), N' — ', @Denominacion);
+        DECLARE @o nchar(1) = NCHAR(0x00F3);
+        DECLARE @i nchar(1) = NCHAR(0x00ED);
+        DECLARE @a nchar(1) = NCHAR(0x00E1);
+        DECLARE @e nchar(1) = NCHAR(0x00E9);
+        DECLARE @Asunto nvarchar(300) = CONCAT(
+            N'Orden de servicio ', ISNULL(@NumeroOrden, @Codigo), N' - ', @Denominacion);
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
-            N'<p>Se comunica la emisión de la orden de servicio <b>', ISNULL(@NumeroOrden, @Codigo),
+            N'<p>Se comunica la emisi', @o, N'n de la orden de servicio <b>', ISNULL(@NumeroOrden, @Codigo),
             N'</b> correspondiente al requerimiento <b>', @Codigo, N'</b>.</p>',
-            N'<p><b>Denominación:</b> ', @Denominacion, N'</p>',
-            N'<p>A partir de esta notificación inicia el plazo de ejecución (',
-            CONVERT(varchar(10), ISNULL(@Plazo, 0)), N' día(s) calendario).</p>',
-            N'<p>Autoridad Nacional de Infraestructura — SIGCM</p>');
+            N'<p><b>Denominaci', @o, N'n:</b> ', @Denominacion, N'</p>',
+            N'<p>A partir de esta notificaci', @o, N'n inicia el plazo de ejecuci', @o, N'n (',
+            CONVERT(varchar(10), ISNULL(@Plazo, 0)), N' d', @i, N'a(s) calendario).</p>',
+            N'<p>Autoridad Nacional de Infraestructura - SIGCM</p>');
 
         SELECT @resultado = (
             SELECT 1 AS estado,

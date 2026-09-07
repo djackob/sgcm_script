@@ -1,4 +1,4 @@
-﻿USE [SIGA_1750];
+USE [SIGA_1750];
 GO
 
 /*
@@ -26,57 +26,26 @@ GO
   1. SIG_SOLICITUD_MODIFICACION      ESTADO '2' (enviada) -> '3' (aprobada).
   2. SIG_DOCUMENTO_ESTADO            nuevo movimiento con ESTADO='3'.
   3. SIG_CUADRO_MODIFICADO_DET       FLAG_MODIFICADO='0', FLAG_SOLICITUD='0',
-                                     MOTIVO_SOLICITUD='0'. ESTADO NO se toca:
-                                     lo incluido sigue en 'I' y lo excluido en
-                                     'E'. Es lo que hace el cliente SIGA, tal
-                                     como aparece en sig_aba_wind30.pbd:
-
-         update SIG_CUADRO_MODIFICADO_DET
-            SET FLAG_MODIFICADO='0', FLAG_SOLICITUD='0', MOTIVO_SOLICITUD='0',
-                CUSER_MOD=..., FECHA_MOD=..., EQUIPO_MOD=...
-          WHERE EXISTS (SELECT 1 FROM SIG_SOLICITUD_MODIFICACION_DET ...)
-
-  Ese tercer paso es el que HABILITA el item: al dejar MOTIVO_SOLICITUD en '0'
-  el item pasa el filtro del selector de requerimientos y recien entonces se
-  puede pedir.
+                                     MOTIVO_SOLICITUD='0'. ESTADO NO se toca.
+  4. SIG_SOLICITUD_GRUPO + _DET      cabecera de "Generacion de Aprobacion de
+                                     Modificaciones al C.M.N." (menu 10032).
+                                     Sin este asiento la solicitud queda
+                                     aprobada pero NO aparece en esa pantalla.
+                                     Varias solicitudes del mismo Anexo 4
+                                     SIGCM (mismo @CodigoAnexo4) comparten un
+                                     solo SEC_SOL_GRU.
 
   ---------------------------------------------------------------------------
   LO QUE ESTE PROCEDIMIENTO NO HACE, Y POR QUE
   ---------------------------------------------------------------------------
-  NO escribe en SIG_CUADRO_MODIFICADO_CMN.
-
-  La primera version lo intentaba, porque a simple vista esa tabla parece un
-  asiento simple: once columnas, y en una muestra por SEC_CUA_MOD_SAL casi todas
-  parecian constantes. Al ejecutarlo, SIGA lo rechazo:
-
-      The INSERT statement conflicted with the FOREIGN KEY constraint
-      "FK_SIG_CUA_MOD_CMN_02" ... table "dbo.SIG_PAAC_CENTRO_COSTO"
-
-  SIG_CUADRO_MODIFICADO_CMN tiene una clave foranea de DIEZ columnas
-  (ANNO_EJEC, SEC_EJEC, TIPO_CONSOLID, NRO_CONSOLID, TIPO_GENERACION, TIPO_BIEN,
-  SEC_CONSOLID, SEC_RESUMEN, SEC_META, SEC_CTRO_COSTO) contra
-  SIG_PAAC_CENTRO_COSTO. Es decir: una fila de consolidacion solo puede existir
-  si el nodo correspondiente del PAAC ya existe. Y SEC_META no es constante: en
-  las filas reales de 01.06.03 toma valores 11, 16, 19, 20...
-
-  Consolidar el CMN es, en SIGA, generar el arbol del PAAC: SIG_PAAC_CONSOLIDADO
-  (13 779 filas), SIG_PAAC_METAS (43 077), SIG_PAAC_CENTRO_COSTO (43 181),
-  SIG_PAAC_ITEM (26 117) y su numeracion propia. Es un proceso por lotes que
-  Abastecimiento corre dentro de SIGA sobre muchas solicitudes a la vez, no el
-  efecto de firmar un documento.
-
-  Los datos lo confirman: de las 5 837 inclusiones ya aprobadas del 2026, solo
-  4 406 estan consolidadas. Aprobacion y consolidacion no van uno a uno.
-
-  Por eso la firma del Anexo 4 llega hasta la aprobacion, que es lo que el
-  SIGCM puede garantizar y lo que el area usuaria necesita para poder pedir. La
-  generacion del PAAC queda donde estaba: en SIGA.
+  NO escribe en SIG_CUADRO_MODIFICADO_CMN (FK de diez columnas contra el PAAC).
+  Aprobacion y consolidacion PAAC no van uno a uno.
 
   ---------------------------------------------------------------------------
   IDEMPOTENCIA
   ---------------------------------------------------------------------------
   Si la solicitud ya esta en ESTADO='3' el procedimiento no falla: completa lo
-  que falte y devuelve el conteo en cero. W001 puede reintentar sin duplicar.
+  que falte (grupo/detalle incluidos) y devuelve el conteo en cero.
 
   SQL compatible con el nivel de compatibilidad 100 de SIGA_1750.
 ===============================================================================
@@ -98,35 +67,20 @@ CREATE PROCEDURE dbo.usp_ext_aprobar_solicitud_cmn
     @Usuario        varchar(30),
     @Equipo         varchar(20) = NULL,
     @Glosa          varchar(500) = NULL,
+    /* Codigo del Anexo 4 SIGCM (ej. A4-2026-000003). Varias solicitudes del
+       mismo paquete deben enviar el mismo valor para compartir SEC_SOL_GRU. */
+    @CodigoAnexo4   varchar(40) = NULL,
     @ItemsAprobados int = NULL OUTPUT,
     @NroConsolid    numeric(5,0) = NULL OUTPUT,
-    /* Ver la nota de usp_ext_incluir_item_cmn: por defecto no devuelve filas,
-       porque W001 lo invoca dentro de un INSERT ... EXEC y un conjunto de
-       resultados inesperado rompe la insercion y el contrato del backend. */
+    @SecSolGru      numeric(10,0) = NULL OUTPUT,
+    /* Por defecto no devuelve filas: W001 lo invoca dentro de INSERT...EXEC. */
     @Detalle        bit = 0
 AS
 BEGIN
     SET NOCOUNT ON;
     SET XACT_ABORT ON;
 
-    /*
-      TRANSACCION PROPIA O AJENA.
-
-      Este procedimiento puede ser llamado de dos formas: suelto, y desde W001
-      dentro de un INSERT ... EXEC, que abre una transaccion implicita. En el
-      segundo caso @@TRANCOUNT ya vale 1 al entrar.
-
-      Un ROLLBACK TRANSACTION no deshace solo lo propio: deshace TODO, incluida
-      la transaccion del llamador, y lo deja con una transaccion inutilizable.
-      El sintoma es "Transaction count after EXECUTE indicates a mismatching
-      number of BEGIN and COMMIT statements".
-
-      Por eso solo se abre y se cierra la transaccion cuando es propia. Si es
-      ajena, el error se propaga y decide el llamador, que es quien la abrio.
-      La atomicidad no se pierde: la transaccion del llamador cubre todo.
-    */
     DECLARE @trnPropia bit = CASE WHEN @@TRANCOUNT = 0 THEN 1 ELSE 0 END;
-
 
     DECLARE
         @Ahora         datetime,
@@ -135,9 +89,14 @@ BEGIN
         @EstadoSol     varchar(1),
         @SecDocEstado  numeric(10,0),
         @Consolidados  int,
-        @Msg           nvarchar(400);
+        @ClaveGrupo    varchar(60),
+        @MarcaGrupo    varchar(80),
+        @GlosaGrupo    varchar(500),
+        @SecDet        numeric(10,0),
+        @GrupoNuevo    bit,
+        @LockGrupo     int,
+        @RecursoGrupo  nvarchar(255);
 
-    /* Saldos alcanzados por la solicitud, con su tipo de bien. */
     DECLARE @S TABLE
     (
         SecCuaModSal numeric(10,0) NOT NULL PRIMARY KEY,
@@ -159,6 +118,16 @@ BEGIN
 
     SET @Ahora = GETDATE();
     IF @Equipo IS NULL SET @Equipo = LEFT(COALESCE(HOST_NAME(),'SISTEMA_EXTERNO'), 20);
+
+    SET @CodigoAnexo4 = NULLIF(LTRIM(RTRIM(@CodigoAnexo4)), '');
+    IF @CodigoAnexo4 IS NULL
+        SET @ClaveGrupo = 'SOL:' + @CentroCosto + ':' + CONVERT(varchar(20), @SecSolicitud);
+    ELSE
+        SET @ClaveGrupo = @CodigoAnexo4;
+
+    SET @MarcaGrupo = '[SIGCM:' + @ClaveGrupo + ']';
+    SET @RecursoGrupo = LEFT('SIGA_CMN_GRUPO_' + CONVERT(varchar(4),@AnoEje) + '_'
+                      + CONVERT(varchar(6),@SecEjec) + '_' + @ClaveGrupo, 255);
 
     BEGIN TRY
         SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
@@ -185,8 +154,6 @@ BEGIN
         IF @EstadoSol NOT IN ('2', '3')
             RAISERROR('Solo se puede aprobar una solicitud enviada (estado 2).', 16, 1);
 
-        /* ---- Saldos que cubre la solicitud ----------------------------- */
-
         INSERT INTO @S (SecCuaModSal, TipoBien)
         SELECT DISTINCT d.SEC_CUA_MOD_SAL, d.TIPO_BIEN
           FROM dbo.SIG_SOLICITUD_MODIFICACION_DET AS sd
@@ -201,7 +168,6 @@ BEGIN
             RAISERROR('La solicitud no tiene items en el cuadro modificado.', 16, 1);
 
         /* ---- 1. Cerrar los flags de la solicitud ----------------------- */
-        /* ESTADO no se toca: la inclusion sigue en I y la exclusion en E. */
 
         UPDATE d
            SET d.FLAG_MODIFICADO  = '0',
@@ -222,11 +188,6 @@ BEGIN
         SET @ItemsAprobados = @@ROWCOUNT;
 
         /* ---- 2. Consolidacion: se informa, no se escribe ---------------- */
-        /* Ver la cabecera. La fila de SIG_CUADRO_MODIFICADO_CMN depende del
-           arbol del PAAC por una FK de diez columnas; generarla desde fuera
-           exigiria inventar la numeracion del PAAC. Aqui solo se cuenta cuantos
-           de los saldos alcanzados YA estaban consolidados, para que el SIGCM
-           pueda mostrar si el area usuaria todavia espera la consolidacion. */
 
         SELECT @Consolidados = COUNT(*)
           FROM @S AS s
@@ -240,7 +201,89 @@ BEGIN
             ON c.SEC_EJEC=@SecEjec AND c.ANNO_EJEC=@AnoEje
            AND c.SEC_CUA_MOD_SAL=s.SecCuaModSal;
 
-        /* ---- 3. Estado de la solicitud y su movimiento ----------------- */
+        /* ---- 3. Cabecera de aprobacion (pantalla 10032) ----------------- */
+
+        SET @GrupoNuevo = 0;
+        SET @SecSolGru = NULL;
+
+        EXEC @LockGrupo = sys.sp_getapplock
+             @Resource = @RecursoGrupo,
+             @LockMode = 'Exclusive',
+             @LockOwner = 'Transaction',
+             @LockTimeout = 15000;
+
+        IF @LockGrupo < 0
+            RAISERROR('No se pudo bloquear el grupo de aprobacion CMN.', 16, 1);
+
+        SELECT TOP 1 @SecSolGru = g.SEC_SOL_GRU
+          FROM dbo.SIG_SOLICITUD_GRUPO AS g WITH (UPDLOCK, HOLDLOCK)
+         WHERE g.SEC_EJEC = @SecEjec
+           AND g.ANNO_EJEC = @AnoEje
+           AND CHARINDEX(@MarcaGrupo, g.GLOSA) > 0
+         ORDER BY g.SEC_SOL_GRU DESC;
+
+        IF @SecSolGru IS NULL
+        BEGIN
+            SELECT @SecSolGru = COALESCE(MAX(SEC_SOL_GRU), 0) + 1
+              FROM dbo.SIG_SOLICITUD_GRUPO WITH (UPDLOCK, HOLDLOCK)
+             WHERE SEC_EJEC = @SecEjec AND ANNO_EJEC = @AnoEje;
+
+            SET @GlosaGrupo = LEFT(
+                'SOLICITUD DE APROBACION DE ANEXO 04 N' + CHAR(176) + ' '
+              + RIGHT('000000' + CONVERT(varchar(10), @SecSolGru), 6)
+              + '-' + CONVERT(varchar(4), @AnoEje)
+              + ' ' + @MarcaGrupo, 500);
+
+            INSERT INTO dbo.SIG_SOLICITUD_GRUPO
+                (SEC_EJEC, ANNO_EJEC, SEC_SOL_GRU, ESTADO, FECHA, REFERENCIA, GLOSA,
+                 CUSER_ID, FECHA_REG, EQUIPO_REG)
+            VALUES
+                (@SecEjec, @AnoEje, @SecSolGru, '3', @Ahora,
+                 'DIRECTIVA N' + CHAR(176) + ' 0007-2025-EF/54.01', @GlosaGrupo,
+                 @Usuario, @Ahora, @Equipo);
+
+            SET @GrupoNuevo = 1;
+        END
+        ELSE
+        BEGIN
+            UPDATE dbo.SIG_SOLICITUD_GRUPO
+               SET ESTADO = '3',
+                   CUSER_MOD = @Usuario,
+                   FECHA_MOD = @Ahora,
+                   EQUIPO_MOD = @Equipo
+             WHERE SEC_EJEC = @SecEjec AND ANNO_EJEC = @AnoEje
+               AND SEC_SOL_GRU = @SecSolGru
+               AND ESTADO <> '3';
+        END
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM dbo.SIG_SOLICITUD_GRUPO_DET
+             WHERE SEC_EJEC = @SecEjec AND ANNO_EJEC = @AnoEje
+               AND SEC_SOL_GRU = @SecSolGru
+               AND SOL_ANNO_EJEC = @AnoEje
+               AND SOL_CC = @CentroCosto
+               AND SEC_SOL_MOD = @SecSolicitud)
+        BEGIN
+            SELECT @SecDet = COALESCE(MAX(SEC_SOL_GRU_DET), 0) + 1
+              FROM dbo.SIG_SOLICITUD_GRUPO_DET WITH (UPDLOCK, HOLDLOCK)
+             WHERE SEC_EJEC = @SecEjec AND ANNO_EJEC = @AnoEje
+               AND SEC_SOL_GRU = @SecSolGru;
+
+            INSERT INTO dbo.SIG_SOLICITUD_GRUPO_DET
+                (SEC_EJEC, ANNO_EJEC, SEC_SOL_GRU, SEC_SOL_GRU_DET,
+                 SOL_ANNO_EJEC, SOL_CC, SEC_SOL_MOD)
+            VALUES
+                (@SecEjec, @AnoEje, @SecSolGru, @SecDet,
+                 @AnoEje, @CentroCosto, @SecSolicitud);
+        END
+
+        /* ---- 4. Estado de la solicitud y movimientos -------------------
+           Patron nativo SIGA (pantalla 10032):
+           - Movimiento de la SOLICITUD: SEC_SOL_MOD lleno, SOL_GRU_* NULL.
+           - Movimiento de la CABECERA del grupo: SEC_SOL_MOD NULL, SOL_GRU_* lleno.
+           Mezclar ambos en la misma fila hace que el DataWindow falle con
+           "Subquery returned more than 1 value" al abrir el grupo. */
 
         IF @EstadoSol = '2'
         BEGIN
@@ -251,9 +294,6 @@ BEGIN
              WHERE SEC_EJEC=@SecEjec AND ANNO_EJEC=@AnoEje
                AND CENTRO_COSTO=@CentroCosto AND SEC_SOL_MOD=@SecSolicitud;
 
-            /* FLAG_ULT_MOV marca el ultimo movimiento DE CADA ESTADO, no el de
-               la solicitud: en los datos reales conviven un '2' y un '3' con la
-               marca en 1. Por eso solo se apaga la de otro '3' anterior. */
             UPDATE dbo.SIG_DOCUMENTO_ESTADO
                SET FLAG_ULT_MOV = '0'
              WHERE SEC_EJEC=@SecEjec AND ESTADO='3' AND SOL_ANNO_EJEC=@AnoEje
@@ -272,8 +312,46 @@ BEGIN
                 (@SecEjec, @SecDocEstado, '3', '1', @Ahora, NULL,
                  @Usuario, @Ahora, @Equipo, @AnoEje, @CentroCosto, @SecSolicitud,
                  NULL, NULL);
-        END;
+        END
 
+        /* Cabecera del grupo: un solo FLAG_ULT_MOV='1' con SEC_SOL_MOD NULL. */
+        IF @GrupoNuevo = 1
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM dbo.SIG_DOCUMENTO_ESTADO
+                 WHERE SEC_EJEC = @SecEjec AND ESTADO = '3'
+                   AND SOL_GRU_ANNO_EJEC = @AnoEje AND SOL_GRU_SEC = @SecSolGru
+                   AND SEC_SOL_MOD IS NULL AND FLAG_ULT_MOV = '1')
+        BEGIN
+            UPDATE dbo.SIG_DOCUMENTO_ESTADO
+               SET FLAG_ULT_MOV = '0'
+             WHERE SEC_EJEC = @SecEjec AND ESTADO = '3'
+               AND SOL_GRU_ANNO_EJEC = @AnoEje AND SOL_GRU_SEC = @SecSolGru
+               AND SEC_SOL_MOD IS NULL AND FLAG_ULT_MOV = '1';
+
+            SELECT @SecDocEstado = COALESCE(MAX(SEC_DOC_EST),0) + 1
+              FROM dbo.SIG_DOCUMENTO_ESTADO WITH (UPDLOCK, HOLDLOCK)
+             WHERE SEC_EJEC=@SecEjec AND ESTADO='3';
+
+            INSERT INTO dbo.SIG_DOCUMENTO_ESTADO
+                (SEC_EJEC, SEC_DOC_EST, ESTADO, FLAG_ULT_MOV, FECHA, OBSERVACION,
+                 CUSER_ID, FECHA_REG, EQUIPO_REG, SOL_ANNO_EJEC, SOL_CC, SEC_SOL_MOD,
+                 SOL_GRU_ANNO_EJEC, SOL_GRU_SEC)
+            VALUES
+                (@SecEjec, @SecDocEstado, '3', '1', @Ahora, NULL,
+                 @Usuario, @Ahora, @Equipo, NULL, NULL, NULL,
+                 @AnoEje, @SecSolGru);
+        END
+
+        /* Limpieza: si alguna corrida anterior enlazo SOL_GRU en el movimiento
+           de la solicitud, lo deshace (idempotente). */
+        UPDATE dbo.SIG_DOCUMENTO_ESTADO
+           SET SOL_GRU_ANNO_EJEC = NULL,
+               SOL_GRU_SEC = NULL
+         WHERE SEC_EJEC = @SecEjec AND ESTADO = '3'
+           AND SOL_ANNO_EJEC = @AnoEje AND SOL_CC = @CentroCosto
+           AND SEC_SOL_MOD = @SecSolicitud
+           AND SOL_GRU_SEC IS NOT NULL;
         IF @trnPropia = 1 COMMIT TRANSACTION;
 
         IF @Detalle = 1
@@ -282,6 +360,7 @@ BEGIN
                    @CentroCosto    AS CENTRO_COSTO,
                    @SecSolicitud   AS SEC_SOL_MOD,
                    '3'             AS ESTADO_SOLICITUD,
+                   @SecSolGru      AS SEC_SOL_GRU,
                    @ItemsAprobados AS FILAS_APROBADAS,
                    @Consolidados   AS SALDOS_YA_CONSOLIDADOS,
                    @NroConsolid    AS NRO_CONSOLID,
@@ -298,8 +377,5 @@ BEGIN
 END;
 GO
 
-PRINT 'Instalado: dbo.usp_ext_aprobar_solicitud_cmn';
+PRINT 'Instalado: dbo.usp_ext_aprobar_solicitud_cmn (con SIG_SOLICITUD_GRUPO).';
 GO
-
-
-

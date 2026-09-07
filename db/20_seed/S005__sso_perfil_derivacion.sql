@@ -121,11 +121,18 @@ INSERT INTO @Arista VALUES
   ('CMN', 'ABAST_COORDINADOR', 'ABAST_ESPECIALISTA', 'MISMA_UNIDAD', 1,
    N'El coordinador reparte entre los especialistas de su unidad.'),
   /* --- REQUERIMIENTO: los tres escalones en las dos areas ----------------- */
+  /* Subida del flujo AU: especialista (Firma especialista) -> coordinador
+     (REQ_OTORGAR_VB) -> jefe. Sin estas aristas el combo «Derivar a» llega
+     vacio y el expediente no queda a nombre de nadie del escalon destino. */
+  ('REQUERIMIENTO', 'AREA_ESPECIALISTA', 'AREA_COORDINADOR',   'MISMA_UNIDAD', 1,
+   N'Firma especialista: el especialista deriva al coordinador del area usuaria.'),
+  ('REQUERIMIENTO', 'AREA_COORDINADOR',  'AREA_JEFE',          'MISMA_UNIDAD', 1,
+   N'Visto bueno: el coordinador deriva al jefe del area usuaria.'),
   ('REQUERIMIENTO', 'AREA_JEFE',         'AREA_COORDINADOR',   'MISMA_UNIDAD', 1,
    N'En Requerimiento el area usuaria si pasa por el coordinador.'),
   ('REQUERIMIENTO', 'AREA_JEFE',         'AREA_ESPECIALISTA',  'MISMA_UNIDAD', 2,
    N'Salto directo del jefe al especialista, tambien en Requerimiento.'),
-  ('REQUERIMIENTO', 'AREA_COORDINADOR',  'AREA_ESPECIALISTA',  'MISMA_UNIDAD', 1,
+  ('REQUERIMIENTO', 'AREA_COORDINADOR',  'AREA_ESPECIALISTA',  'MISMA_UNIDAD', 2,
    N'El coordinador del area usuaria reparte entre sus especialistas.'),
   ('REQUERIMIENTO', 'ABAST_JEFE',        'ABAST_COORDINADOR',  'MISMA_UNIDAD', 1,
    N'Camino natural en Abastecimiento.'),
