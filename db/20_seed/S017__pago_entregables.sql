@@ -77,14 +77,14 @@ DECLARE @Estado TABLE (CodigoEstado varchar(60), Nombre varchar(150), Orden int,
                        EsInicial bit, EsFinal bit, RolResponsable varchar(40) NULL);
 INSERT INTO @Estado VALUES
   ('PAG_PENDIENTE',                'Entregable pendiente de presentacion',           10, 1, 0, 'PROVEEDOR'),
-  ('PAG_ENTREGABLE_PRESENTADO',    'Entregable presentado — revision AU',            20, 0, 0, 'AREA_ESPECIALISTA'),
+  ('PAG_ENTREGABLE_PRESENTADO',    'Entregable presentado - revision AU',            20, 0, 0, 'AREA_ESPECIALISTA'),
   ('PAG_OBSERVADO_AU',             'Observado por el Area usuaria',                  25, 0, 0, 'PROVEEDOR'),
   ('PAG_CONFORMIDAD_PEND_FIRMA',   'Acta de conformidad por firmar (Jefe AU)',       30, 0, 0, 'AREA_JEFE'),
-  ('PAG_CONFORMIDAD_APROBADA',     'Conformidad aprobada — liquidacion DEC',         40, 0, 0, 'ABAST_ESPECIALISTA'),
-  ('PAG_EXPEDIENTE_LIQUIDADO',     'Expediente liquidado — control previo UC',       50, 0, 0, 'CONTABILIDAD'),
-  ('PAG_OBS_UC_DEC',               'Observado por Contabilidad — vuelve a DEC',      55, 0, 0, 'ABAST_ESPECIALISTA'),
-  ('PAG_OBS_UC_AU',                'Observado por Contabilidad — vuelve a AU',       56, 0, 0, 'AREA_ESPECIALISTA'),
-  ('PAG_DEVENGADO_APROBADO',       'Devengado aprobado — giro Tesoreria',            60, 0, 0, 'TESORERIA'),
+  ('PAG_CONFORMIDAD_APROBADA',     'Conformidad aprobada - liquidacion DEC',         40, 0, 0, 'ABAST_ESPECIALISTA'),
+  ('PAG_EXPEDIENTE_LIQUIDADO',     'Expediente liquidado - control previo UC',       50, 0, 0, 'CONTABILIDAD'),
+  ('PAG_OBS_UC_DEC',               'Observado por Contabilidad - vuelve a DEC',      55, 0, 0, 'ABAST_ESPECIALISTA'),
+  ('PAG_OBS_UC_AU',                'Observado por Contabilidad - vuelve a AU',       56, 0, 0, 'AREA_ESPECIALISTA'),
+  ('PAG_DEVENGADO_APROBADO',       'Devengado aprobado - giro Tesoreria',            60, 0, 0, 'TESORERIA'),
   ('PAG_PAGO_EFECTUADO',           'Pago efectuado (cierre)',                        90, 0, 1, NULL);
 
 UPDATE d
@@ -260,27 +260,27 @@ INSERT INTO @Regla VALUES
   ('PAG_REVISION_AU',
    'Revision tecnica del Area usuaria (7 dias calendario desde el dia siguiente)',
    'PAG_ENTREGABLE_PRESENTADO', 7, 'CALENDARIO', 0,
-   'Directiva 002-2026-ANIN — conformidad tecnica 7 dias calendario'),
+   'Directiva 002-2026-ANIN - conformidad tecnica 7 dias calendario'),
 
   ('PAG_SUBSANACION_AU',
    'Subsanacion del locador (tope 30% del plazo del entregable; se calcula en F012)',
    'PAG_OBSERVADO_AU', 1, 'CALENDARIO', 1,
-   'Directiva 002-2026-ANIN — subsanacion sin penalidad si es oportuna'),
+   'Directiva 002-2026-ANIN - subsanacion sin penalidad si es oportuna'),
 
   ('PAG_LIQUIDACION_DEC',
    'Checklist y liquidacion DEC (3 dias habiles)',
    'PAG_CONFORMIDAD_APROBADA', 3, 'HABIL', 0,
-   'Directiva 002-2026-ANIN — Anexo 9 / Anexo 10'),
+   'Directiva 002-2026-ANIN - Anexo 9 / Anexo 10'),
 
   ('PAG_CONTROL_PREVIO_UC',
    'Control previo contable (2 dias habiles)',
    'PAG_EXPEDIENTE_LIQUIDADO', 2, 'HABIL', 0,
-   'Directiva 002-2026-ANIN — Unidad de Contabilidad'),
+   'Directiva 002-2026-ANIN - Unidad de Contabilidad'),
 
   ('PAG_PAGO_GLOBAL',
    'Pago neto (10 dias habiles desde la conformidad tecnica; +5 justificados)',
    'PAG_CONFORMIDAD_APROBADA', 10, 'HABIL', 1,
-   'Directiva 002-2026-ANIN — plazo global de pago');
+   'Directiva 002-2026-ANIN - plazo global de pago');
 
 UPDATE d
    SET d.Nombre = s.Nombre, d.CodigoEstadoInicio = s.CodigoEstadoInicio, d.Dias = s.Dias,
