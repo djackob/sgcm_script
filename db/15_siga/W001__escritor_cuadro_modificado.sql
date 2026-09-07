@@ -1,4 +1,4 @@
-﻿/*
+/*
 ===============================================================================
   SIGCM - W001 : Escritor del cuadro modificado de SIGA
   Motor  : SQL Server 2022 (compat 160)
@@ -50,10 +50,11 @@
   ---------------------------------------------------------------------------
   OPERACIONES SOPORTADAS
   ---------------------------------------------------------------------------
-      INCLUIR_ITEM          -> siga.usp_ext_registrar_item_cmn
+      INCLUIR_ITEM          -> siga.usp_ext_incluir_item_cmn
       EXCLUIR_ITEM          -> siga.usp_ext_excluir_item_cmn
       MODIFICAR_CANTIDADES  -> pendiente
-      CONSOLIDAR_CMN        -> pendiente
+      CONSOLIDAR_CMN        -> siga.usp_ext_aprobar_solicitud_cmn
+                               (+ SIG_SOLICITUD_GRUPO / _DET para pantalla 10032)
 
   EXCLUIR_ITEM no busca el item: lo recibe. El RequestJson debe traer
   RefSecCuadro y RefSecItem, que son el SEC_CUADRO y el SEC_ITEM que SIGA
@@ -323,7 +324,8 @@ BEGIN
                         @FamiliaBien varchar(4), @ItemBien varchar(4),
                         @UnidadMedida numeric(3,0), @PrecioUnit numeric(16,6),
                         @Comentario varchar(500),
-                        @RefSecCuadro numeric(10,0), @RefSecItem numeric(10,0);
+                        @RefSecCuadro numeric(10,0), @RefSecItem numeric(10,0),
+                        @CodigoAnexo4 varchar(40);
 
                 SELECT @AnoEje         = j.AnoEje,
                        @SecEjec        = j.SecEjec,
@@ -349,7 +351,8 @@ BEGIN
                        @PrecioUnit     = j.PrecioUnitario,
                        @Comentario     = j.Comentario,
                        @RefSecCuadro   = j.RefSecCuadro,
-                       @RefSecItem     = j.RefSecItem
+                       @RefSecItem     = j.RefSecItem,
+                       @CodigoAnexo4   = j.Anexo4
                   FROM OPENJSON(@req)
                   WITH (AnoEje numeric(4,0),         SecEjec numeric(6,0),
                         CentroCosto varchar(15),     TipoMovimiento varchar(20),
@@ -363,7 +366,8 @@ BEGIN
                         FamiliaBien varchar(4),      ItemBien varchar(4),
                         UnidadMedida numeric(3,0),   PrecioUnitario numeric(16,6),
                         Comentario varchar(500),
-                        RefSecCuadro numeric(10,0),  RefSecItem numeric(10,0)) AS j;
+                        RefSecCuadro numeric(10,0),  RefSecItem numeric(10,0),
+                        Anexo4 varchar(40)) AS j;
 
                 /* ---- EL PIVOTE: 48 periodos JSON -> 4 filas XML ------- */
                 /*
@@ -442,6 +446,7 @@ BEGIN
                 DECLARE @FilasAprobadas int, @NroConsolid numeric(5,0);
                 DECLARE @solSiga numeric(10,0), @ccSiga varchar(15);
                 DECLARE @aprobadasTotal int = 0, @solicitudes int = 0;
+                DECLARE @SecSolGru numeric(10,0) = NULL;
 
                 IF @Modo = 'real'
                 BEGIN
@@ -452,6 +457,10 @@ BEGIN
                        quedaron cuando se valido el Anexo 3. Una solicitud del
                        SIGCM puede haber abierto mas de una solicitud en SIGA
                        (una por centro de costo), asi que se recorren todas.
+
+                       Ademas crea/enlaza SIG_SOLICITUD_GRUPO (+_DET), que es
+                       lo que lista la pantalla de Generacion de Aprobacion.
+                       El codigo Anexo4 del RequestJson agrupa el paquete.
                        ------------------------------------------------------ */
                     IF @op = 'CONSOLIDAR_CMN'
                     BEGIN
@@ -479,8 +488,10 @@ BEGIN
                                  @Usuario      = @Cuenta,
                                  @Equipo       = @Equipo,
                                  @Glosa        = @Comentario,
+                                 @CodigoAnexo4 = @CodigoAnexo4,
                                  @ItemsAprobados = @FilasAprobadas OUTPUT,
-                                 @NroConsolid    = @NroConsolid OUTPUT;
+                                 @NroConsolid    = @NroConsolid OUTPUT,
+                                 @SecSolGru      = @SecSolGru OUTPUT;
 
                             SET @aprobadasTotal = @aprobadasTotal + ISNULL(@FilasAprobadas, 0);
                             SET @solicitudes    = @solicitudes + 1;
@@ -608,6 +619,10 @@ BEGIN
                                    SecCuadro  = @SecCuadro,
                                    SecItem    = @ItemSec,
                                    SecSolicitud = @SecSolicitud,
+                                   SecSolGru  = CASE WHEN @op='CONSOLIDAR_CMN'
+                                                     THEN @SecSolGru ELSE NULL END,
+                                   CodigoAnexo4 = CASE WHEN @op='CONSOLIDAR_CMN'
+                                                       THEN @CodigoAnexo4 ELSE NULL END,
                                    SolicitudesAprobadas = CASE WHEN @op='CONSOLIDAR_CMN'
                                                                THEN @solicitudes ELSE NULL END,
                                    FilasAprobadas       = CASE WHEN @op='CONSOLIDAR_CMN'

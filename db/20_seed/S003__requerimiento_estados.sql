@@ -279,9 +279,9 @@ INSERT INTO @TrRol VALUES
      El Coordinador ya no lo ve en «Solo mi bandeja», asi que el Especialista
      cierra la revision (conforme / no objecion / observar), igual que en CMN
      el especialista de Abastecimiento conforma u observa. */
-  ('REQ_NO_OBJECION_DEC','ABAST_ESPECIALISTA'), ('REQ_NO_OBJECION_DEC','ABAST_COORDINADOR'),
+  ('REQ_NO_OBJECION_DEC','ABAST_ESPECIALISTA'),
   ('REQ_ACEPTAR_NO_OBJECION','AREA_JEFE'),
-  ('REQ_CONFORMIDAD_DEC','ABAST_ESPECIALISTA'), ('REQ_CONFORMIDAD_DEC','ABAST_COORDINADOR'),
+  ('REQ_CONFORMIDAD_DEC','ABAST_ESPECIALISTA'),
   ('REQ_CONFORMIDAD_DAI','DAI'),
   ('REQ_SUBSANAR','AREA_ESPECIALISTA'), ('REQ_SUBSANAR','AREA_JEFE'),
   ('REQ_ANULAR_BORRADOR','AREA_ESPECIALISTA'), ('REQ_ANULAR_BORRADOR','AREA_JEFE'),

@@ -94,24 +94,31 @@ BEGIN
             THROW 51875, 'VALIDACION_CORREO: el locador no tiene correo en el Anexo 5. Completelo antes de invitar.', 1;
 
         DECLARE @PlazoHasta date = sigcm.fnSumarDiasHabiles(CONVERT(date, GETDATE()), 3);
+        /* Textos con NCHAR: evita mojibake si sqlcmd aplica el .sql sin UTF-8. */
+        DECLARE @o nchar(1) = NCHAR(0x00F3); /* o aguda */
+        DECLARE @i nchar(1) = NCHAR(0x00ED); /* i aguda */
+        DECLARE @a nchar(1) = NCHAR(0x00E1); /* a aguda */
+        DECLARE @e nchar(1) = NCHAR(0x00E9); /* e aguda */
+        DECLARE @u nchar(1) = NCHAR(0x00FA); /* u aguda */
+        DECLARE @n nchar(1) = NCHAR(0x00F1); /* ene */
         DECLARE @Asunto nvarchar(300) = CONCAT(
-            N'Solicitud de cotización — ', ISNULL(@Codigo, N''), N' — ', @Denominacion);
+            N'Solicitud de cotizaci', @o, N'n - ', ISNULL(@Codigo, N''), N' - ', @Denominacion);
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
             N'<p>Estimado/a <b>', ISNULL(@NombreLocador, N'locador'), N'</b>:</p>',
-            N'<p>La Autoridad Nacional de Infraestructura le invita a presentar su cotización ',
-            N'para el requerimiento <b>', @Codigo, N'</b> (locación de servicios, invitación directa).</p>',
-            N'<p><b>Denominación:</b> ', @Denominacion, N'</p>',
-            N'<p>Adjunto encontrará el paquete digital:</p>',
+            N'<p>La Autoridad Nacional de Infraestructura le invita a presentar su cotizaci', @o, N'n ',
+            N'para el requerimiento <b>', @Codigo, N'</b> (locaci', @o, N'n de servicios, invitaci', @o, N'n directa).</p>',
+            N'<p><b>Denominaci', @o, N'n:</b> ', @Denominacion, N'</p>',
+            N'<p>Adjunto encontrar', @a, N' el paquete digital:</p>',
             N'<ol>',
-            N'<li>Anexo 3 — Términos de Referencia (TDR) aprobados</li>',
-            N'<li>Anexo 6 — Formato de cotización y declaración jurada del proveedor (CCI y monto a dos decimales)</li>',
-            N'<li>Anexo 7 — Declaración jurada de prohibiciones e incompatibilidades</li>',
-            N'<li>Instructivo para denunciar presuntos actos de corrupción y Política de Integridad y Antisoborno de la ANIN</li>',
+            N'<li>Anexo 3 - T', @e, N'rminos de Referencia (TDR) aprobados</li>',
+            N'<li>Anexo 6 - Formato de cotizaci', @o, N'n y declaraci', @o, N'n jurada del proveedor (CCI y monto a dos decimales)</li>',
+            N'<li>Anexo 7 - Declaraci', @o, N'n jurada de prohibiciones e incompatibilidades</li>',
+            N'<li>Instructivo para denunciar presuntos actos de corrupci', @o, N'n y Pol', @i, N'tica de Integridad y Antisoborno de la ANIN</li>',
             N'</ol>',
-            N'<p>El plazo máximo de respuesta es de <b>tres (3) días hábiles</b>, hasta el <b>',
+            N'<p>El plazo m', @a, N'ximo de respuesta es de <b>tres (3) d', @i, N'as h', @a, N'biles</b>, hasta el <b>',
             CONVERT(varchar(10), @PlazoHasta, 103),
             N'</b>. Debe devolver los Anexos 6 y 7 firmados.</p>',
-            N'<p>Autoridad Nacional de Infraestructura — Unidad de Abastecimiento (DEC)</p>');
+            N'<p>Autoridad Nacional de Infraestructura - Unidad de Abastecimiento (DEC)</p>');
 
         SELECT @resultado = (
             SELECT 1 AS estado,

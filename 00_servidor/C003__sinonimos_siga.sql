@@ -89,6 +89,10 @@ INSERT INTO @tablas (tabla) VALUES
     (N'SIG_DETALLE_PEDIDOS_ANEXO'),
     (N'SIG_ORDEN_ITEM'),
     (N'SIG_ORDEN_ITEM_ANEXO'),
+    /* Orden de servicio y su interfase SIAF: el modulo de pagos lee de aqui el
+       estado real de la O/S (hitos 1 y 4). Ver siga.vwOrdenServicioSiga. */
+    (N'SIG_ORDEN_ADQUISICION'),
+    (N'SIG_ORDEN_INTERFASE'),
     (N'SIG_CONTRATISTAS');
 
 DECLARE @tabla sysname, @sql nvarchar(max), @creados int = 0;

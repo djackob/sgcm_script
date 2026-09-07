@@ -81,7 +81,11 @@ INSERT INTO @Accion VALUES
   ('CMN_SUBSANAR',                'SUBSANAR'),
   ('CMN_SUBS_JEFE_ENVIAR',        'CERRAR'),
   /* Requerimiento */
-  ('REQ_SUBSANAR',                'CERRAR');
+  ('REQ_OBS_AU_COORD_DERIVAR',    'RECEPCIONAR'),
+  ('REQ_SUBSANAR',                'CERRAR'),
+  ('REQ_DERIVAR_COORD_OBS',       'CERRAR'),
+  ('REQ_DERIVAR_COORD',           'CERRAR'),
+  ('REQ_FIRMAR_AU',               'CERRAR');
 
 UPDATE d
    SET d.AccionObservacion = s.AccionObservacion
@@ -114,7 +118,7 @@ INSERT INTO @Circuito VALUES
   ('CMN_OBS_ABAST_COORD'), ('CMN_OBS_ABAST_JEFE'), ('CMN_OBS_AU_JEFE'),
   ('CMN_OBS_AU_COORD'),    ('CMN_OBSERVADO'),
   ('CMN_SUBS_AU_COORD'),   ('CMN_SUBS_AU_JEFE'),
-  ('REQ_OBSERVADO');
+  ('REQ_OBS_AU_JEFE'), ('REQ_OBS_AU_COORD'), ('REQ_OBSERVADO');
 
 DECLARE @Reparadas int;
 
