@@ -145,16 +145,38 @@ y es el que puede ejecutar también la secretaria de Abastecimiento.
 
 ### La bajada dentro del área usuaria, y la vuelta
 
+**En CMN no hay coordinador.** El jefe baja la observación directo a cualquiera
+de sus especialistas, ése la resuelve y se la devuelve a él. Coordinado con el
+área el 2026-09-08 y sembrado en `S035`; vale igual para **todas** las áreas
+usuarias.
+
 | # | Estado | Quién | DNI | Acción | Pasa a |
 |---|---|---|---|---|---|
-| 4 | `CMN_OBS_AU_JEFE` | AU · Jefe **o Secretaria** | 44687266 · **40597381** | Derivar al Coordinador del área usuaria | `CMN_OBS_AU_COORD` |
-| 5 | `CMN_OBS_AU_COORD` | AU · Coordinador | **41159236** | Derivar al Especialista para subsanar | `CMN_OBSERVADO` |
-| 6 | `CMN_OBSERVADO` | AU · Especialista | 46183970 | Registrar la subsanación y derivar al Coordinador *(comentario)* | `CMN_SUBS_AU_COORD` |
-| 7 | `CMN_SUBS_AU_COORD` | AU · Coordinador | 41159236 | Derivar lo subsanado al Jefe | `CMN_SUBS_AU_JEFE` |
-| 8 | `CMN_SUBS_AU_JEFE` | AU · Jefe | 44687266 | **Firmar** y remitir subsanado a Abastecimiento 🖊 | `CMN_EN_ABAST_JEFE` |
+| 4 | `CMN_OBS_AU_JEFE` | AU · Jefe **o Secretaria** | 44687266 · **40597381** | Derivar al Especialista para subsanar | `CMN_OBSERVADO` |
+| 5 | `CMN_OBSERVADO` | AU · Especialista | 46183970 · 43552822 | Registrar la subsanación y devolver al Jefe *(comentario)* | `CMN_SUBS_AU_JEFE` |
+| 6 | `CMN_SUBS_AU_JEFE` | AU · Jefe | 44687266 | **Firmar** y remitir el subsanado 🖊 | *vuelve a quien observó* |
 
-El paso 8 **no lo puede dar la secretaria**: exige firma. Es el único de todo el
+En el paso 4 el combo «Derivar a» ofrece a **todos los especialistas de la
+unidad** —la arista `CMN · AREA_JEFE → AREA_ESPECIALISTA` tiene alcance
+`MISMA_UNIDAD`—, así que el jefe elige a quién se lo encarga. En OTI hoy salen
+tres.
+
+El paso 6 **no lo puede dar la secretaria**: exige firma. Es el único de todo el
 ciclo que le queda fuera.
+
+### El subsanado vuelve a quien observó, no siempre a Abastecimiento
+
+La transición declara `CMN_EN_ABAST_JEFE` como destino, pero la observación
+guarda su `CodigoEstadoRetorno` y `sigcm.fnEstadoDestinoTransicion` (V029) manda
+el expediente de vuelta al escalón que lo observó:
+
+| Observó | El subsanado vuelve a |
+|---|---|
+| Oficina de Administración | `CMN_EN_EVAL_OA` |
+| Abastecimiento | `CMN_EN_ABAST_JEFE` |
+
+Comprobado con los dos casos de `S911`. La observación queda `CERRADA` al firmar
+el jefe.
 
 ### Dónde entran las dos secretarías
 
@@ -166,23 +188,13 @@ ciclo que le queda fuera.
 Cada una ve la bandeja de su unidad igual que su jefe, y **ninguna aparece en el
 combo «Derivar a»** de nadie.
 
-### El coordinador del área usuaria
+### El coordinador del área usuaria no interviene en CMN
 
-**EVELYN POBLETE CACERES · DNI 41159236**, con `PE099 COORDINADOR OFICINA` desde
-el 2026-09-02 (`sso/S02`). Los pasos 5 y 7 son suyos y de nadie más: la
-secretaría no los hereda, porque son del coordinador y no del jefe.
-
-> **Defecto abierto.** En el paso 4 el combo «Derivar a» sale **vacío**:
-> `sigcm.RolDerivacion` no tiene la arista `CMN · AREA_JEFE → AREA_COORDINADOR`
-> —sólo existe en REQUERIMIENTO—. La transición avanza igual y Evelyn lo ve en su
-> bandeja, pero el expediente queda **sin persona asignada**. Y si la pantalla
-> exige elegir destinatario, el jefe no podrá avanzar.
->
-> Se arregla con una fila, pero contradice la regla escrita de que «en CMN el
-> área usuaria no pasa por el coordinador». La alternativa es reactivar
-> `CMN_OBS_AU_JEFE_DERIVAR_ESP`, que bajaba directo al especialista y es lo que
-> esa regla describe. Es decisión de negocio, y toca lo que `S025`/`S026` acaban
-> de cambiar.
+`AREA_COORDINADOR` existe —EVELYN POBLETE CACERES, DNI 41159236, con `PE099`
+desde el 2026-09-02— y **sí trabaja en Requerimiento**, pero **no en CMN**: ahí
+el circuito va del jefe al especialista y de vuelta. `S035` retiró sus dos pasos
+y dejó `CMN_OBS_AU_COORD` y `CMN_SUBS_AU_COORD` marcados como «circuito
+retirado», sin transiciones activas.
 
 ### Datos sembrados para probarlo
 

@@ -170,6 +170,41 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-08 — En CMN la observación no pasa por el coordinador
+
+**Qué se decidió.** Coordinado con el área: en CMN **no hay coordinador**. Cuando
+un expediente vuelve observado, el jefe del área usuaria lo deriva a **cualquiera
+de sus especialistas**, ése lo subsana y se lo devuelve a él, que lo firma y lo
+remite. Igual para todas las áreas usuarias.
+
+**De dónde venía el enredo.** `S006` ya había creado el salto directo jefe →
+especialista. `S029` lo desactivó para que CMN se pareciera a Requerimiento, que
+sí tiene coordinador. Esa simetría era el error: la regla «en CMN el área usuaria
+no pasa por el coordinador» está escrita desde el principio, y el único sitio
+donde se había colado era justamente el ciclo de observación. El síntoma se vio
+al probarlo: el combo «Derivar a» del jefe salía **vacío**, porque
+`sigcm.RolDerivacion` no tiene —ni debe tener— la arista `CMN · AREA_JEFE →
+AREA_COORDINADOR`.
+
+**Qué hace `S035`.** Reactiva `CMN_OBS_AU_JEFE_DERIVAR_ESP`, apunta
+`CMN_SUBSANAR` a `CMN_SUBS_AU_JEFE` y retira los dos pasos del coordinador. Los
+estados `CMN_OBS_AU_COORD` y `CMN_SUBS_AU_COORD` no se borran —el historial los
+referencia— sino que se renombran como «circuito retirado». La semilla termina
+comprobando que las tres patas del ciclo quedaron activas y falla si no: un
+expediente observado que no puede volver es peor que uno que no se puede
+observar.
+
+**Dos escalones menos, y quien subsana le responde a quien le encargó.**
+
+**Lo que se descubrió al probarlo.** El subsanado **vuelve a quien observó**, no
+siempre a Abastecimiento: la transición declara `CMN_EN_ABAST_JEFE`, pero la
+observación guarda su `CodigoEstadoRetorno` y `fnEstadoDestinoTransicion` (V029)
+lo redirige. Con OA observando vuelve a `CMN_EN_EVAL_OA`; con Abastecimiento, a
+`CMN_EN_ABAST_JEFE`. Comprobado con los dos casos de `S911`.
+
+**Probado de punta a punta** con las rutinas reales, en los dos caminos, y el
+combo del paso de derivación devuelve los tres especialistas de OTI.
+
 ### 2026-09-03 (noche) — La integración de pagos con SIGA, hito por hito
 
 **Qué se preguntó.** Dónde debería escribir el módulo de pagos en SIGA. `F012`
