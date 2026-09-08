@@ -170,6 +170,40 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-08 (tarde) — Las pruebas dejan de estar dispersas
+
+**El problema.** El guion de pruebas vivía en la raíz (`RECORRIDO_PRUEBAS.md`),
+las semillas en `db/90_pruebas/`, los análisis de integración en
+`SIGA/integracion/` y la carpeta `pruebas/` tenía un único `.sql` huérfano que no
+mencionaba ningún documento. Quien llegaba a probar no sabía por dónde empezar.
+
+**Qué se hizo.** `pruebas/` pasa a ser la puerta de entrada:
+
+| | |
+|---|---|
+| `pruebas/PRUEBAS_FLUJO_COMPLETO.md` | el guion, movido desde la raíz y ampliado |
+| `pruebas/README.md` | qué hay en la carpeta y dónde está cada cosa |
+| `pruebas/humo_maestros_siga.sql` | la prueba de humo, renombrada para que se sepa qué prueba |
+
+Las **semillas se quedan en `db/90_pruebas/`** a propósito: comparten convención
+con las migraciones —`S9xx`, idempotentes, se limpian solas— y el instalador las
+ignora. El `README` de `pruebas/` explica esa separación para que nadie las mueva.
+
+Los documentos de `SIGA/integracion/` tampoco se movieron: **no son guiones de
+prueba sino análisis** de cómo funciona la integración. El guion los enlaza.
+
+**Lo que se amplió del guion.** Ahora cubre los casos de observación de los tres
+módulos, no sólo el camino feliz: las seis entradas de observación de
+Requerimiento con su bajada por el coordinador —que en Requerimiento sí
+interviene, al revés que en CMN—, las tres de pagos con quién subsana cada una, y
+un bloque de «antes de una presentación» con las tres cosas que se olvidan: la
+llave de firma, el worker de integración y sembrar los datos.
+
+**Y se dijo en los tres sitios donde una sesión nueva mira primero.** `CLAUDE.md`
+e `INIT.md` §3.5 y §7 mandan a `pruebas/` a quien vaya a probar o a exponer, con
+una regla: no armar un recorrido por cuenta propia, y si el guion falta o miente,
+corregirlo en la misma sesión.
+
 ### 2026-09-08 — En CMN la observación no pasa por el coordinador
 
 **Qué se decidió.** Coordinado con el área: en CMN **no hay coordinador**. Cuando

@@ -1,7 +1,7 @@
 # Entregables y pagos: el flujo, y qué se integra con SIGA
 
 > Para **recorrerlo** paso a paso con las cuentas de prueba, y encadenado con
-> CMN y Requerimiento, está `RECORRIDO_PRUEBAS.md` en la raíz del repositorio.
+> CMN y Requerimiento, está `pruebas/PRUEBAS_FLUJO_COMPLETO.md`.
 > Este documento explica el porqué; aquél es el guion.
 
 Escrito el **2026-09-03**. Todo lo que se afirma aquí está verificado contra

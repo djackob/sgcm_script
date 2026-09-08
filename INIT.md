@@ -119,9 +119,18 @@ base que arrastra filas de una instalación vieja no se nota; en una base al dí
 con el repositorio, sí. Si el permiso puede llegar antes que la transición,
 guardar el `INSERT` con `AND EXISTS (SELECT 1 FROM sigcm.Transicion ...)`.
 
-### 3.5 Todo cambio de flujo termina con su script de prueba
-En `db/90_pruebas/`. Si no toca SIGA, que se limpie solo y sea repetible, como
-`S903` o `S909`.
+### 3.5 Las pruebas viven en `pruebas/`, y el guion se actualiza al probar
+**Antes de probar cualquier cosa —o de preparar una demostración— se lee
+[`pruebas/PRUEBAS_FLUJO_COMPLETO.md`](pruebas/PRUEBAS_FLUJO_COMPLETO.md).** Es
+el recorrido CMN → Requerimiento → Pagos paso a paso, con el DNI que da cada
+paso, los casos de observación de los tres módulos y qué se escribe en SIGA. No
+se arma un recorrido por tu cuenta: si ya está escrito, se sigue; si falta o
+miente, **se corrige ahí mismo, en la misma sesión**.
+
+Los **datos sembrados** siguen en `db/90_pruebas/` con prefijo `S9xx`, porque
+comparten convención con las migraciones y el instalador los ignora a propósito.
+**Todo cambio de flujo termina con su script de prueba ahí**; si no toca SIGA,
+que se limpie solo y sea repetible, como `S903`, `S909` o `S911`.
 
 ### 3.6 Los formatos oficiales son réplicas
 El PDF de un Anexo replica el formato de la Directiva. No se le agregan campos,
@@ -243,6 +252,8 @@ presentados. Es lo que destraba la prueba de pagos mientras siga el defecto 1.
 1. **Antes de investigar, buscar.** El orden es este documento → `CONTEXTO.md` →
    `SIGA_APLICATIVO.md` → `ANALISIS_CMN.md`. Si la respuesta no está, entonces sí
    investigar, **y escribirla** donde corresponda.
+   **Si lo que vas a hacer es probar o preparar una demostración, el orden es
+   otro: `pruebas/PRUEBAS_FLUJO_COMPLETO.md` primero.**
 2. **Editar sólo dentro de los repos.**
 3. **Al cerrar una iteración, anotarla en la bitácora** de `CONTEXTO.md` §6, y
    actualizar de este documento la sección 4 (estado) y la 5 (defectos).
@@ -259,7 +270,8 @@ Este archivo no los reemplaza: los ordena.
 | Documento | Para qué |
 |---|---|
 | `ESTANDARES.md` | **Normativo.** Cómo se escribe un procedimiento, un endpoint, un componente. Léelo entero antes de escribir código nuevo. |
-| `RECORRIDO_PRUEBAS.md` | **El guion.** Cómo recorrer CMN → Requerimiento → Pagos de punta a punta, paso por paso, con la cuenta que da cada uno. |
+| `pruebas/PRUEBAS_FLUJO_COMPLETO.md` | **El guion de pruebas y de la demostración.** CMN → Requerimiento → Pagos paso por paso, con el DNI de cada paso y los casos de observación. Empieza por aquí si vas a probar o a exponer. |
+| `pruebas/README.md` | Qué hay en la carpeta de pruebas y dónde está cada cosa. |
 | `CONTEXTO.md` | Qué es el sistema, las decisiones de arquitectura y la **bitácora de iteraciones**. |
 | `LEEME.md` | Los cuatro bloques del proyecto y el estado de las copias de trabajo. |
 | `README.md` | La base de datos: estructura de carpetas y cómo instalar. |

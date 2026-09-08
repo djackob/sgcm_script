@@ -1,12 +1,21 @@
-# Recorrido de pruebas: CMN → Requerimiento → Pagos
+# Pruebas del flujo completo: CMN → Requerimiento → Pagos
 
-Cómo recorrer el sistema entero, de punta a punta, con las cuentas de prueba del
-ambiente de desarrollo. Última verificación contra la base: **2026-09-04**.
+Cómo recorrer el sistema entero, de punta a punta, con las cuentas del ambiente
+de desarrollo. **Éste es el guion para probar y para exponer.** Última
+verificación contra la base: **2026-09-08**.
 
-> Este documento es el guion. Lo que explica **por qué** cada paso hace lo que
-> hace está en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` (el tramo CMN →
-> pedido) y en `SIGA/integracion/FLUJO_PAGOS.md` (el tramo de pagos y la
+> Este documento dice **qué hacer y con qué cuenta**. Lo que explica **por qué**
+> cada paso hace lo que hace está en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md`
+> (el tramo CMN → pedido) y en `SIGA/integracion/FLUJO_PAGOS.md` (pagos y la
 > integración con SIGA). El estado de cada módulo, en `INIT.md` §4.
+
+**Índice de lo que se puede probar**
+
+| Tramo | Camino feliz | Observaciones |
+|---|---|---|
+| A · Gestión CMN | §2 | §2 bis |
+| B · Requerimiento | §4 | §4 bis |
+| C · Entregables y pagos | §5 | §5 bis |
 
 ---
 
@@ -265,6 +274,38 @@ al locador como usuario externo del SSO** (sistema SGCM-E, perfil
 **Pendiente:** entre el paso 15 y el 16, en SIGA una persona de Logística aprueba
 la orden y la compromete en SIAF. El SGCM lo **muestra** pero no lo exige.
 
+### 4 bis · Las observaciones del requerimiento
+
+A diferencia del CMN, **en Requerimiento el coordinador del área usuaria sí
+interviene**: es su circuito propio, no un descuido.
+
+**Quién puede observar, y a dónde manda el expediente:**
+
+| Desde | Quién | DNI | Acción | Va a |
+|---|---|---|---|---|
+| `REQ_PEND_VB_AU` | AU · Coordinador | 41159236 | Observar documento | `REQ_OBSERVADO` |
+| `REQ_PEND_FIRMA_AU` | AU · Jefe **o Secretaria** | 44687266 · **40597381** | Observar documento | `REQ_OBSERVADO` |
+| `REQ_EN_EVAL_OA` | Of. Administración | 46025999 | Observar desde OA | `REQ_OBS_AU_JEFE` |
+| `REQ_EN_ABAST_JEFE` | Abast · Jefe **o Secretaria** | 09086695 · **46970816** | Observar y devolver al Jefe AU | `REQ_OBS_AU_JEFE` |
+| `REQ_EN_EVAL_DEC` | Abast · Especialista / Coordinador | 45648851 · 42551460 | Observar desde la DEC | `REQ_OBSERVADO` |
+| `REQ_FILTROS` | Abast · Especialista / Coordinador | 45648851 · 42551460 | Devolver al Área usuaria / Observar | `REQ_OBSERVADO` |
+
+Todas exigen comentario.
+
+**La bajada, cuando la observación llega al jefe:**
+
+| # | Estado | Quién | DNI | Acción | Pasa a |
+|---|---|---|---|---|---|
+| 1 | `REQ_OBS_AU_JEFE` | AU · Jefe **o Secretaria** | 44687266 · **40597381** | Derivar al Coordinador del Área usuaria | `REQ_OBS_AU_COORD` |
+| 2 | `REQ_OBS_AU_COORD` | AU · Coordinador | **41159236** | Enviar al Especialista para subsanar | `REQ_OBSERVADO` |
+| 3 | `REQ_OBSERVADO` | AU · Especialista | 46183970 · 43552822 | **Firma especialista** 🖊 | `REQ_PEND_VB_AU` |
+
+El paso 3 devuelve el expediente al circuito normal: coordinador → jefe → firma
+→ OA. **Exige firma del especialista**, así que la secretaría no lo cubre.
+
+**Archivar** es la otra salida: el Coordinador (`REQ_ARCHIVAR_VB`) o el Jefe y su
+Secretaria (`REQ_ARCHIVAR_FIRMA`) pueden anular el expediente con comentario.
+
 ---
 
 ## 5. Tramo C · Entregables y pagos
@@ -286,15 +327,18 @@ porque el PDF refleja lo que está en pantalla.
 **El Anexo 10 es condicional.** La Directiva lo pide «de corresponder»: sin mora
 el botón dice sólo «Generar Anexo 9».
 
-### Rutas de observación
+### 5 bis · Las observaciones de pagos
 
-| Desde | Quién | Acción | A dónde | Quién subsana |
-|---|---|---|---|---|
-| `PAG_ENTREGABLE_PRESENTADO` | 46183970 | Observar entregable | `PAG_OBSERVADO_AU` | el locador |
-| `PAG_EXPEDIENTE_LIQUIDADO` | 17400217 | Devolver a DEC | `PAG_OBS_UC_DEC` | 45648851 |
-| `PAG_EXPEDIENTE_LIQUIDADO` | 17400217 | Devolver al Área usuaria | `PAG_OBS_UC_AU` | 46183970 / 44687266 |
+| Desde | Quién | DNI | Acción | Va a | Quién subsana y con qué |
+|---|---|---|---|---|---|
+| `PAG_ENTREGABLE_PRESENTADO` | AU · Especialista | 46183970 | Observar entregable | `PAG_OBSERVADO_AU` | el **locador**, con «Subsanar observaciones» |
+| `PAG_EXPEDIENTE_LIQUIDADO` | Contabilidad | 17400217 | Devolver a DEC con observaciones contables | `PAG_OBS_UC_DEC` | **45648851**, «Remitir subsanado a Contabilidad» |
+| `PAG_EXPEDIENTE_LIQUIDADO` | Contabilidad | 17400217 | Devolver al Área usuaria | `PAG_OBS_UC_AU` | **46183970** o **44687266**, «Remitir subsanado» |
 
-Las tres de ida exigen comentario; las de vuelta, no.
+Las tres de ida exigen comentario; las de vuelta, no. Ninguna exige firma.
+
+Aquí **no hay secretaría**: el módulo de pagos no le da acciones ni a
+`AREA_SECRETARIA` ni a `ABAST_SECRETARIA` más allá de ver la bandeja.
 
 ### Qué mirar en la pantalla
 
@@ -315,14 +359,37 @@ a QA ni a producción, son **repetibles** y **se limpian solas**.
 |---|---|
 | `S909__datos_prueba_pago.sql` | `REQ-PRU-PAGO-0001` en `REQ_OS_EMITIDA` · locador **persona jurídica** · 3 entregables de S/ 1,500, dos ya presentados **en plazo** |
 | `S910__datos_prueba_pago_penalidad.sql` | `REQ-PRU-PAGO-0002` en `REQ_OS_EMITIDA` · locador **persona natural** · 2 entregables de S/ 2,000: el 1 llega **10 días tarde** (S/ 166.70 de penalidad) y el 2 en plazo |
+| `S911__cmn_devolucion_au.sql` | Dos CMN que ya recorrieron el flujo, parados antes de la observación: uno en la bandeja de **Administración** y otro en la de **Abastecimiento** |
 
 ```bash
 sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S909__datos_prueba_pago.sql
+sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S910__datos_prueba_pago_penalidad.sql
+sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S911__cmn_devolucion_au.sql
 ```
 
-Entre los dos quedan cubiertos los cuatro casos que el módulo distingue: locador
-jurídico y natural, entregable con penalidad y sin ella. Correrlos otra vez
-reinicia el tramo de pagos sin tocar nada más.
+Entre `S909` y `S910` quedan cubiertos los cuatro casos que el módulo de pagos
+distingue: locador jurídico y natural, entregable con penalidad y sin ella. Los
+tres son repetibles: correrlos otra vez reinicia su tramo sin tocar nada más.
+
+---
+
+## 6 bis. Antes de una presentación
+
+Tres cosas que se olvidan y se notan en vivo:
+
+1. **La firma.** `firma.omitir_dispositivo` en `src/assets/config/config.json`
+   tiene que ir en **`false`** en el equipo donde se expone, o el sistema no
+   pedirá el token y el paso de firma pasará de largo. En `true` sólo para
+   ensayar sin dispositivo.
+2. **El worker de integración.** `IntegracionSiga` en el `appsettings.json` del
+   backend: en `Modo: "real"` escribe en `SIGA_1750` cada 30 segundos por su
+   cuenta. Decidir si va encendido.
+3. **Los datos.** Correr las tres semillas de arriba justo antes, para arrancar
+   desde un punto conocido. Y **cambiar de usuario en cada transferencia**: un
+   expediente que le toca a otro perfil no muestra sus acciones.
+
+El backend hay que **matarlo y relevantarlo** después de compilar (`INIT.md`
+§3.2); si no, un endpoint nuevo responde 404 aunque esté en el repo.
 
 ---
 
