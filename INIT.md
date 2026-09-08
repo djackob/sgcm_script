@@ -179,6 +179,7 @@ Comprobados contra la base el 2026-09-03. **Ninguno es una suposición.**
 | 3 | Nadie le dice al locador su contraseña | `login.fn_insertar_tm_login_usuario_externo_contrataciones` | La función la deriva de `SHA512(documento + año)` y responde «se le enviará las credenciales a su correo», pero ese correo no lo manda nadie. El correo de la O/S no las incluye. |
 | 4 | El SIGCM no espera los dos pasos que en SIGA hace una persona | `usp_ext_crear_cuadro_adquisicion_desde_pedido`; `paPrepararNotificacionOrden` | El cuadro se arma sin comprobar que el pedido esté autorizado (`SIG_PEDIDOS.ESTADO='1'`), y la orden se notifica sin leer si en SIGA fue aprobada y comprometida en SIAF (`ESTADO='1'`, `ESTADO_SIAF='2'`). Diagnóstico completo y camino propuesto en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` §6. |
 | 5 | El combo de pedidos manda a los bienes al tipo equivocado | `F001`, maestro `PEDIDO` | `TipoPedido` debe ser `'2'` para bien y para servicio: el tipo 2 es el pedido con cargo al CMN (453/453 líneas B y 7 070/7 070 S enlazadas) y el tipo 1 es almacén (0 de 3 261). Hoy sólo acierta con servicios. |
+| 6 | En CMN el jefe del área usuaria no tiene a quién derivar la observación | `sigcm.RolDerivacion` | Falta la arista `CMN · AREA_JEFE → AREA_COORDINADOR`; sólo existe en REQUERIMIENTO. `CMN_OBS_AU_JEFE_DERIVAR` avanza igual, pero el expediente queda sin persona asignada y el combo «Derivar a» sale vacío. Chocan la regla «en CMN el área usuaria no pasa por el coordinador» y la cadena de observación, que sí pasa. Detalle en `RECORRIDO_PRUEBAS.md` §2 bis. |
 
 Cerrados el 2026-09-03: `REQ_REGISTRAR_CCP` y `REQ_NOTIFICAR_OS` los crea `S019`;
 el filtro `TipoPedido` ya calcula `'2'` para servicios en `F001` y así está en la
@@ -222,6 +223,7 @@ cortes señalados, está en `D:\SGCM_SIGA\recorrido pruebas requerimiento y pago
 | Abastecimiento — Jefe / Coordinador / Especialista | `09086695` / `42551460` / `45648851` |
 | Contabilidad / Tesorería | `17400217` / `10712503` |
 | Proveedor (locador de prueba, lo crea `S909`) | `locador.prueba` |
+| Área usuaria — Secretaria (`PE100` / `PE101`) | sin cuenta asignada todavía |
 
 ```bash
 sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S909__datos_prueba_pago.sql

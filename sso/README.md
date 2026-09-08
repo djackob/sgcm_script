@@ -23,6 +23,8 @@ Una fila hecha a mano no sobrevive a un despliegue. Por eso está aquí.
 |---|---|---|
 | `S01__acceso_administrador.sql` | Da el perfil `P0001 ADMINISTRADOR` del sistema `S0073` a la persona que se indique | sí, aplicado en desarrollo el 2026-08-28 |
 | `S02__acceso_coordinador_oti.sql` | Crea `PE099 COORDINADOR OFICINA`, lo liga a `S0073` y se lo asigna a la persona en OTI | sí, aplicado en desarrollo el 2026-09-02 |
+| `S03__perfil_secretaria_area_usuaria.sql` | Crea `PE100 SECRETARIA OFICINA` y `PE101 SECRETARIA UNIDAD`, los liga a `S0073` y, si se le pasa un `dni`, se lo asigna | sí, aplicado en desarrollo el 2026-09-07 |
+| `S04__perfil_secretaria_abastecimiento.sql` | Crea `PE102 SECRETARIA ABASTECIMIENTO`, lo liga a `S0073` y, si se le pasa un `dni`, se lo asigna | sí, aplicado en desarrollo el 2026-09-07 |
 
 Se ejecutan con `psql` y llevan su propio parámetro:
 

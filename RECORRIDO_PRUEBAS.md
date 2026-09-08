@@ -33,12 +33,32 @@ ambiente de desarrollo. Última verificación contra la base: **2026-09-04**.
 | 42551460 | MAIRA CABRERA OSORIO | `ABAST_COORDINADOR` | UA |
 | 45648851 | MAGALY VARGAS CASTILLA | `ABAST_ESPECIALISTA` | UA |
 | 17400217 | VICTOR PISCOYA | `CONTABILIDAD` | UC |
+| 41159236 | EVELYN POBLETE CACERES | `AREA_COORDINADOR` | OTI |
 | 10712503 | MANUEL CORONADO VELEZ | `TESORERIA` | UT |
 | — | locador de prueba | `PROVEEDOR` | portal externo |
 
-**Roles sin cuenta real:** `AREA_COORDINADOR` no tiene ninguna cuenta del SSO, y
-por eso los recorridos de abajo esquivan su visto bueno. `OPP` ya no interviene:
-la CCP la carga la DEC.
+**`AREA_COORDINADOR` ya tiene cuenta.** `sso/S02` le dio `PE099 COORDINADOR
+OFICINA` a Evelyn Poblete el 2026-09-02. Los recorridos del tramo B siguen
+esquivando su visto bueno porque es el camino más corto, no porque falte la
+cuenta. `OPP` ya no interviene: la CCP la carga la DEC.
+
+**Las dos secretarías**, creadas el 2026-09-07. Cada una ve la misma bandeja que
+su jefe y hace lo mismo **salvo firmar**; deriva al coordinador y al especialista
+de su unidad, y **no aparece** en el combo «Derivar a» de nadie.
+
+| DNI | Persona | Rol | Unidad | Perfil SSO |
+|---|---|---|---|---|
+| 40597381 | GRACIELA NAJARRO BELLIDO | `AREA_SECRETARIA` | OTI | `PE100` |
+| 46970816 | WENDY MENDOZA CORREA | `ABAST_SECRETARIA` | UA | `PE102` |
+
+Para dárselo a otra persona:
+
+```bash
+psql -h 192.168.20.111 -p 5434 -U postgres -d saa_ -v dni=<DNI> -v cod_dependencia=D0001 -v cod_perfil=PE100 -f sso/S03__perfil_secretaria_area_usuaria.sql
+```
+
+`PE100` si el área usuaria es una oficina, `PE101` si es una unidad, y
+`sso/S04` con `PE102` para la secretaría de Abastecimiento.
 
 ---
 
@@ -90,12 +110,98 @@ Los dos enlaces que más confusión generan:
 
 🖊 exige firma · 📤 escribe en SIGA
 
-**Ruta de observación:** la OA (46025999) o el Especialista de Abastecimiento
-(45648851) pueden observar; la observación baja hasta el Especialista del área
-usuaria (46183970), que subsana, y vuelve a subir firmada por el Jefe.
+**Ruta de observación:** desarrollada entera en la sección 2 bis.
 
 **El paso 9 es el importante:** ahí el ítem queda pedible en SIGA. No hace falta
 que ningún logístico mueva nada a mano.
+
+---
+
+## 2 bis. Tramo A · el ciclo de observación del CMN
+
+Un CMN se puede observar desde **tres sitios**, y los tres terminan devolviéndolo
+al **Jefe del área usuaria**. Desde ahí baja al especialista, que subsana, y todo
+vuelve a subir.
+
+### Las tres entradas
+
+| Desde | Estado | Quién | DNI | Acción | Termina en |
+|:--:|---|---|---|---|---|
+| **1** | `CMN_EN_EVAL_OA` | Of. Administración | 46025999 | Observar desde la Oficina de Administración | `CMN_OBS_AU_JEFE` |
+| **2** | `CMN_EN_ABAST_JEFE` | Abast · Jefe **o Secretaria** | 09086695 · **46970816** | Observar y devolver al Jefe del Área usuaria | `CMN_OBS_AU_JEFE` |
+| **3** | `CMN_EN_ABAST_ESP` | Abast · Especialista | 45648851 | Observar el Anexo 3 | `CMN_OBS_ABAST_COORD` |
+
+Las tres exigen comentario: es lo que el área usuaria tiene que subsanar.
+
+**1 y 2 son atajos: van directo al Jefe del área usuaria.** El 2 lo sembró `S030`
+y es el que puede ejecutar también la secretaria de Abastecimiento.
+
+### La entrada 3 sube dos escalones antes de devolver
+
+| # | Estado | Quién | DNI | Acción | Pasa a |
+|---|---|---|---|---|---|
+| 3.1 | `CMN_OBS_ABAST_COORD` | Abast · Coordinador **o Secretaria** | 42551460 · **46970816** | Elevar la observación al Jefe de Abastecimiento | `CMN_OBS_ABAST_JEFE` |
+| 3.2 | `CMN_OBS_ABAST_JEFE` | Abast · Jefe **o Secretaria** | 09086695 · **46970816** | Devolver observado al Jefe del área usuaria | `CMN_OBS_AU_JEFE` |
+
+### La bajada dentro del área usuaria, y la vuelta
+
+| # | Estado | Quién | DNI | Acción | Pasa a |
+|---|---|---|---|---|---|
+| 4 | `CMN_OBS_AU_JEFE` | AU · Jefe **o Secretaria** | 44687266 · **40597381** | Derivar al Coordinador del área usuaria | `CMN_OBS_AU_COORD` |
+| 5 | `CMN_OBS_AU_COORD` | AU · Coordinador | **41159236** | Derivar al Especialista para subsanar | `CMN_OBSERVADO` |
+| 6 | `CMN_OBSERVADO` | AU · Especialista | 46183970 | Registrar la subsanación y derivar al Coordinador *(comentario)* | `CMN_SUBS_AU_COORD` |
+| 7 | `CMN_SUBS_AU_COORD` | AU · Coordinador | 41159236 | Derivar lo subsanado al Jefe | `CMN_SUBS_AU_JEFE` |
+| 8 | `CMN_SUBS_AU_JEFE` | AU · Jefe | 44687266 | **Firmar** y remitir subsanado a Abastecimiento 🖊 | `CMN_EN_ABAST_JEFE` |
+
+El paso 8 **no lo puede dar la secretaria**: exige firma. Es el único de todo el
+ciclo que le queda fuera.
+
+### Dónde entran las dos secretarías
+
+| Rol | Persona | DNI | Pasos que puede dar |
+|---|---|---|---|
+| `AREA_SECRETARIA` | GRACIELA NAJARRO BELLIDO (OTI) | **40597381** | 4 |
+| `ABAST_SECRETARIA` | WENDY MENDOZA CORREA (UA) | **46970816** | 2 · 3.1 · 3.2 |
+
+Cada una ve la bandeja de su unidad igual que su jefe, y **ninguna aparece en el
+combo «Derivar a»** de nadie.
+
+### El coordinador del área usuaria
+
+**EVELYN POBLETE CACERES · DNI 41159236**, con `PE099 COORDINADOR OFICINA` desde
+el 2026-09-02 (`sso/S02`). Los pasos 5 y 7 son suyos y de nadie más: la
+secretaría no los hereda, porque son del coordinador y no del jefe.
+
+> **Defecto abierto.** En el paso 4 el combo «Derivar a» sale **vacío**:
+> `sigcm.RolDerivacion` no tiene la arista `CMN · AREA_JEFE → AREA_COORDINADOR`
+> —sólo existe en REQUERIMIENTO—. La transición avanza igual y Evelyn lo ve en su
+> bandeja, pero el expediente queda **sin persona asignada**. Y si la pantalla
+> exige elegir destinatario, el jefe no podrá avanzar.
+>
+> Se arregla con una fila, pero contradice la regla escrita de que «en CMN el
+> área usuaria no pasa por el coordinador». La alternativa es reactivar
+> `CMN_OBS_AU_JEFE_DERIVAR_ESP`, que bajaba directo al especialista y es lo que
+> esa regla describe. Es decisión de negocio, y toca lo que `S025`/`S026` acaban
+> de cambiar.
+
+### Datos sembrados para probarlo
+
+`db/90_pruebas/S911__cmn_devolucion_au.sql` deja dos expedientes que ya
+recorrieron el flujo de verdad —registro, Anexo 3, PDF, firma del jefe— parados
+justo antes de la observación:
+
+| Expediente | Estado | Bandeja | Para probar la entrada |
+|---|---|---|---|
+| el primero | `CMN_EN_EVAL_OA` | Administración | **1** |
+| el segundo | `CMN_EN_ABAST_JEFE` | Abastecimiento | **2** |
+
+```bash
+sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S911__cmn_devolucion_au.sql
+```
+
+Repetible y se limpia solo: reconoce lo suyo por la marca `S911` en el sustento.
+Para la entrada 3 hay que llevar un expediente hasta `CMN_EN_ABAST_ESP` a mano,
+derivándolo desde Abastecimiento.
 
 ---
 
