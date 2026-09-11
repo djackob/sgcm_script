@@ -350,6 +350,157 @@ Aquí **no hay secretaría**: el módulo de pagos no le da acciones ni a
 
 ---
 
+---
+
+## 5 ter. El correo que cambia en el SSO
+
+El SSO manda sobre `sigcm.Usuario`, y estas pruebas comprueban que eso se cumple
+de verdad. Salen del defecto del **2026-09-09**: se cambió el correo de una
+cuenta en el SSO a las 00:33 y el aviso del Anexo 4 de la 01:03 se fue igual a la
+dirección anterior. Quedó registrado en `cmn.NotificacionAnexo4` de la base
+desplegada, y se «arregló solo» a las 09:59 cuando alguien volvió a entrar.
+
+### Por qué pasaba, en dos frases
+
+`sigcm.Usuario` es una **réplica** del padrón del SSO, y sólo se reconciliaba
+cuando alguien **ingresaba**. Con un token de ocho horas, quien ya estaba dentro
+trabajaba toda la jornada contra la foto de la mañana. Encima, la orden de
+servicio guardaba una **copia congelada** del correo del área usuaria tomada al
+registrarla, y la notificación leía esa copia y no el dato vigente.
+
+### Dónde se prueba cada cosa
+
+**El SSO de desarrollo redirige al servidor desplegado, no a `localhost:4200`.**
+Eso parte las pruebas en dos y conviene tenerlo claro antes de empezar:
+
+| Qué se prueba | Dónde | Cómo |
+|---|---|---|
+| La rutina resuelve el correo en vivo (C) | cualquier `DBSIGCM` | `S913`, sin navegador |
+| El refresco antes de notificar (A) | **desplegado** `192.168.20.111:9047` | a mano, abajo |
+| El refresco programado (B) | **desplegado** | a mano, abajo |
+
+Contra `localhost:4200` no se puede recorrer el ingreso por SSO: `url_sistema`
+del sistema 73 apunta al desplegado. Si hace falta probar A y B en local, el
+camino es `acceso_local: "true"` en el `appsettings.json` del backend — pero
+**ojo: con `acceso_local` encendido el ingreso no pasa por el SSO y el padrón no
+se sincroniza nunca**, así que ese modo sirve para todo menos para esto.
+
+### Prueba 1 · La rutina, sin navegador
+
+```bash
+sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S913__correo_sso_desfasado.sql
+```
+
+Cubre cuatro casos y devuelve código distinto de cero si alguno falla:
+
+| Caso | Qué monta | Esperado |
+|---|---|---|
+| 1 | La copia congelada y el correo vigente **difieren** | gana el vigente |
+| 2 | La persona ya **no tiene** correo vigente (baja en el SSO) | cae a la copia; la orden se notifica igual |
+| 3 | CMN, que ya resolvía en vivo | sigue resolviendo en vivo |
+| 4 | El candado de `paSincronizarPadronSso` | está puesto |
+
+No deja rastro: manipula dentro de una transacción y hace `ROLLBACK`. El caso 3
+queda **OMITIDO** si la base no tiene ninguna solicitud CMN con el Anexo 4
+firmado; eso no es un fallo, es que falta el dato.
+
+**Que la prueba tiene dientes** está comprobado: aplicando la versión anterior de
+`F010` el caso 1 falla con el mensaje exacto del defecto.
+
+### Prueba 2 · El refresco antes de notificar, en el desplegado
+
+Ésta es la que reproduce el defecto real de punta a punta.
+
+1. Entra al sistema con una cuenta y **deja la sesión abierta**. No la cierres en
+   ningún momento: el defecto vivía justo ahí.
+2. Con la sesión abierta, cambia el correo en el SSO:
+
+```bash
+psql -h 192.168.20.111 -p 5434 -U postgres -d saa_ -c "UPDATE login.td_login_usuario_correo SET correo_electronico = 'prueba.nueva@anin.gob.pe' WHERE id_usuario = 6 AND activo;"
+```
+
+3. Comprueba que la réplica **todavía tiene el correo viejo**. Tiene que tenerlo:
+   nadie ha vuelto a entrar.
+
+```bash
+sqlcmd -S 192.168.40.74 -U w_sgcmenores -d DBSIGCM -b -I -Q "SELECT Cuenta, Correo FROM sigcm.Usuario WHERE Cuenta = '44687266'"
+```
+
+4. **Sin cerrar sesión**, dispara una notificación desde la pantalla: firma el
+   Anexo 4 y usa *Notificar al área usuaria*, o notifica una orden de servicio.
+5. Vuelve a mirar la réplica y, sobre todo, a quién se envió:
+
+```bash
+sqlcmd -S 192.168.40.74 -U w_sgcmenores -d DBSIGCM -b -I -Q "SELECT TOP 3 Destinatario, Copia, EnviadaEn FROM cmn.NotificacionAnexo4 ORDER BY EnviadaEn DESC"
+```
+
+**Esperado:** el destinatario es `prueba.nueva@anin.gob.pe`. Antes del arreglo
+era el anterior, y la fila quedaba en esa tabla como prueba.
+
+Acuérdate de dejar el correo como estaba al terminar.
+
+### Prueba 3 · El refresco programado, en el desplegado
+
+`PadronSso` está **apagado por defecto** en el `appsettings.json` versionado. En
+el desplegado se enciende:
+
+```json
+"PadronSso": { "Habilitado": true, "IntervaloSegundos": 900, "EsperaInicialSegundos": 30 }
+```
+
+Al arrancar el backend, el log tiene que decir una de estas dos, y hay que mirar
+cuál:
+
+```
+info: PadronSsoWorker[0] Refresco programado del padron SSO habilitado cada 900 s.
+info: PadronSsoWorker[0] Refresco programado del padron SSO deshabilitado. ...
+```
+
+Con él encendido, cada vuelta escribe el resumen y, si hay accesos que no se
+pudieron traducir, los saca como **warning** — ésos son personas que no van a
+poder entrar:
+
+```
+info: Padron SSO reconciliado. Resumen: {"PadronRecibido":24,"UnidadesAlta":0,...}
+warn: El padron trae 1 acceso(s) que no se pudieron traducir: [{"Cuenta":"32885691",...,"Motivo":"El cod_perfil no esta mapeado en sigcm.PerfilSso."}]
+```
+
+Para comprobarlo **sin esperar quince minutos**, baja el intervalo al mínimo
+—`"IntervaloSegundos": 60`— cambia un correo en el SSO, espera un minuto y mira
+`sigcm.Usuario` sin que nadie haya ingresado:
+
+```bash
+sqlcmd -S 192.168.40.74 -U w_sgcmenores -d DBSIGCM -b -I -Q "SELECT TOP 5 Disparador, PadronRecibido, Fecha FROM sigcm.SincronizacionSso ORDER BY Fecha DESC"
+```
+
+La columna `Disparador` distingue quién lo pidió: `INGRESO` (alguien entró),
+`NOTIFICACION` (se iba a mandar un correo) o `MANTENIMIENTO` (el worker o el
+panel). Si sólo aparece `INGRESO`, el worker no está corriendo.
+
+### Prueba 4 · Que el worker y un ingreso no se pisen
+
+Con el worker encendido, la reconciliación dejó de ser cosa de una sola persona a
+la vez. Las tres operaciones tocan las mismas filas y el **cierre** de
+asignaciones es el peligroso: dos sesiones recorriendo `UsuarioRol` en orden
+distinto es la receta del interbloqueo. Por eso la rutina toma un
+`sp_getapplock` de transacción.
+
+Comprobado con dos sesiones: mientras una lo retiene, la otra no lo consigue
+(`-1`) y sale sin reconciliar en vez de esperar o de interbloquearse. El caso 4
+de `S913` verifica que el candado sigue en la rutina.
+
+### Lo que este arreglo NO cubre
+
+El correo del **locador** no lo gobierna el SSO: sale del Anexo 5 y se guarda en
+`OrdenServicio.CorreoLocador`, `ExpedientePago.CorreoLocador` e
+`InvitacionCotizacion.Destinatario`. Si el locador se equivocó al escribirlo, se
+corrige en el Anexo 5, no aquí.
+
+Y sigue abierto el defecto 3 de `INIT.md` §5: al locador **nadie le envía su
+contraseña** del portal externo.
+
+---
+
 ## 6. Datos sembrados, para no recorrerlo todo
 
 Las semillas de prueba viven en **`db/90_pruebas/`**, con prefijo `S9xx`. No van
@@ -360,11 +511,23 @@ a QA ni a producción, son **repetibles** y **se limpian solas**.
 | `S909__datos_prueba_pago.sql` | `REQ-PRU-PAGO-0001` en `REQ_OS_EMITIDA` · locador **persona jurídica** · 3 entregables de S/ 1,500, dos ya presentados **en plazo** |
 | `S910__datos_prueba_pago_penalidad.sql` | `REQ-PRU-PAGO-0002` en `REQ_OS_EMITIDA` · locador **persona natural** · 2 entregables de S/ 2,000: el 1 llega **10 días tarde** (S/ 166.70 de penalidad) y el 2 en plazo |
 | `S911__cmn_devolucion_au.sql` | Dos CMN que ya recorrieron el flujo, parados antes de la observación: uno en la bandeja de **Administración** y otro en la de **Abastecimiento** |
+| `S912__pagos_entregables_presentados.sql` | Da el **paso 1 de pagos** sobre los expedientes que la base ya tiene abiertos: los deja en `PAG_ENTREGABLE_PRESENTADO`, listos para el paso 2. No siembra requerimientos ni órdenes |
+| `S913__correo_sso_desfasado.sql` | **No siembra nada: comprueba.** Que el correo vigente del SSO gana a la copia congelada en la orden de servicio. Cuatro casos, `ROLLBACK` al final, código distinto de cero si alguno falla |
+
+`S912` es para el **servidor desplegado**, donde los requerimientos ya existen y
+lo único que falta es el paso del locador. Toca sólo el esquema `pago` —y, si el
+locador no está en el padrón, su terna `PROVEEDOR`, que es la misma cuenta con
+la que entra al portal externo.
 
 ```bash
 sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S909__datos_prueba_pago.sql
 sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S910__datos_prueba_pago_penalidad.sql
 sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S911__cmn_devolucion_au.sql
+sqlcmd -S 192.168.40.75 -U developer_anin -d DBSIGCM -b -I -i db/90_pruebas/S913__correo_sso_desfasado.sql
+```
+
+```bash
+sqlcmd -S 192.168.40.74 -U w_sgcmenores -d DBSIGCM -b -I -i db/90_pruebas/S912__pagos_entregables_presentados.sql
 ```
 
 Entre `S909` y `S910` quedan cubiertos los cuatro casos que el módulo de pagos

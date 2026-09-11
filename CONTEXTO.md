@@ -170,6 +170,62 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-11 — El correo del SSO manda sobre la copia local
+
+**El problema.** Durante la grabación del vídeo se cambió el correo de un usuario
+en el SSO y las notificaciones siguieron llegando a la bandeja anterior. No era
+una impresión: el 2026-09-09 el correo cambió en `login.td_login_usuario_correo`
+a las 00:33 y el aviso del Anexo 4 de la 01:03 se fue igual a la dirección vieja.
+La fila está en `cmn.NotificacionAnexo4` de la base desplegada, y la siguiente
+notificación —09:59, ya con el correo nuevo— muestra que se «arreglaba solo»
+cuando alguien volvía a entrar.
+
+**Lo que NO era.** No era el modelo de datos. `sigcm.Usuario` ya tenía
+`IdUsuarioSso`, ya se emparejaba por ese id y `paSincronizarPadronSso` ya pisaba
+nombres, cargo y correo con lo que dice el SSO. Tampoco era el token: el servicio
+de token **no devuelve el correo**, sólo acredita la cuenta; el correo sale del
+padrón, por la conexión de sólo lectura a `saa_`.
+
+**Lo que sí era.** Dos cosas independientes:
+
+1. La reconciliación sólo se disparaba al **ingresar**, y el JWT dura ocho horas.
+   Quien ya estaba dentro trabajaba toda la jornada contra la foto de la mañana.
+2. `requerimiento.OrdenServicio.CorreoAreaUsuaria` guardaba una **copia** tomada
+   al registrar la orden, y `paPrepararNotificacionOrden` leía esa copia. Ésa no
+   caduca nunca: aunque el padrón estuviera al día, la notificación usaba el
+   valor viejo.
+
+**Qué se hizo.**
+
+- **Refresco antes de notificar.** `ControladorPuente.RefrescarPadronSso()`, en
+  los tres endpoints que mandan correo (`notificarAnexo4`,
+  `invitacionCotizacionLocador`, `notificarOrdenServicio`). Va en la base de los
+  controladores y no repetido en cada uno por la misma razón que `ActorDeSesion`:
+  olvidarlo no da un error visible, da un correo en la bandeja de otro.
+- **Worker `PadronSso`**, cada 15 minutos, apagado por defecto. No sustituye al
+  anterior: el refresco previo garantiza el dato exacto en el envío, el worker
+  impide que el resto —bandejas, derivación, altas y bajas— se aleje más de un
+  intervalo.
+- **`paPrepararNotificacionOrden` resuelve en vivo** contra `sigcm.Usuario` por
+  `IdResponsable`, con la copia congelada sólo como respaldo para cuando la
+  persona ya no tiene correo vigente. CMN ya lo hacía así desde `F013`.
+- **`sp_getapplock` en `paSincronizarPadronSso`.** Con el worker corriendo solo,
+  el solape con un ingreso deja de ser raro, y el cierre de asignaciones recorre
+  `UsuarioRol` en orden variable.
+
+**Qué se decidió y por qué no lo otro.** Se descartó la tabla de puros ids
+leyendo el SSO en vivo: DBSIGCM es SQL Server y `saa_` es PostgreSQL, así que las
+rutinas perderían el `JOIN`; una caída del SSO dejaría al sistema sin poder pintar
+un nombre; y 10 FKs apuntan a `sigcm.Usuario`, que es lo que permite responder
+quién firmó con qué cargo el día que se firmó. El problema nunca fue el modelo,
+era la frecuencia del refresco.
+
+**Cómo se comprueba.** `db/90_pruebas/S913__correo_sso_desfasado.sql`, cuatro
+casos, `ROLLBACK` al final. Se verificó que **falla** con la versión anterior de
+`F010`, que es lo que separa una prueba de un adorno. El guion manual está en
+`pruebas/PRUEBAS_FLUJO_COMPLETO.md` §5 ter, y tiene en cuenta que el SSO de
+desarrollo redirige al servidor desplegado y no a `localhost:4200`.
+
 ### 2026-09-08 (tarde) — Las pruebas dejan de estar dispersas
 
 **El problema.** El guion de pruebas vivía en la raíz (`RECORRIDO_PRUEBAS.md`),

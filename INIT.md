@@ -6,7 +6,7 @@ IA que arranca sin contexto, y por eso está escrito para que en una lectura se
 sepa: qué es el sistema, qué reglas no se negocian, en qué estado está cada
 módulo y qué está roto ahora mismo.
 
-Última actualización: **2026-09-03**.
+Última actualización: **2026-09-11**.
 
 > **No es el único documento, es el índice.** Lo que aquí se resume en tres
 > líneas está desarrollado en los documentos de la sección 8. Cuando algo de
@@ -175,6 +175,13 @@ con los conteos que lo sostienen, está en `SIGA/integracion/FLUJO_PAGOS.md`.
 SSO institucional como única puerta (`acceso_local = "false"`), selector de
 perfil, panel de accesos, firma en cadena, trazabilidad, cola hacia SIGA.
 
+**El SSO es la fuente de verdad de la identidad, y ahora se cumple de verdad.**
+`sigcm.Usuario` es una réplica del padrón y se reconcilia por tres caminos, no
+sólo al ingresar: al **ingresar**, **antes de cada correo** y por el worker
+`PadronSso` cada 15 minutos. Los tres llaman a la misma rutina
+(`sigcm.paSincronizarPadronSso`), que toma un `sp_getapplock` para que no se
+pisen. La columna `Disparador` de `sigcm.SincronizacionSso` dice cuál fue.
+
 ---
 
 ## 5. Defectos abiertos
@@ -192,6 +199,13 @@ Comprobados contra la base el 2026-09-03. **Ninguno es una suposición.**
 Cerrados el 2026-09-03: `REQ_REGISTRAR_CCP` y `REQ_NOTIFICAR_OS` los crea `S019`;
 el filtro `TipoPedido` ya calcula `'2'` para servicios en `F001` y así está en la
 base —lo que decía este cuadro estaba desactualizado—.
+
+Cerrado el 2026-09-11: las notificaciones seguían yendo al correo anterior
+después de cambiarlo en el SSO. Eran dos causas: `sigcm.Usuario` sólo se
+refrescaba al ingresar —y el token dura 8 h—, y `paPrepararNotificacionOrden`
+leía la copia congelada en `OrdenServicio.CorreoAreaUsuaria` en vez del dato
+vigente. Se cierran con el refresco previo a notificar, el worker `PadronSso` y
+la resolución en vivo en `F010`/`F008`. Lo comprueba `S913`.
 
 Cerrado el 2026-09-08: en CMN el jefe del área usuaria no tenía a quién derivar
 la observación, porque la cadena pasaba por un coordinador que en CMN no existe.
@@ -287,6 +301,24 @@ Este archivo no los reemplaza: los ordena.
 
 Lo último, para que una sesión nueva sepa dónde se quedó. El detalle va en
 `CONTEXTO.md` §6.
+
+**2026-09-11 · El correo del SSO manda sobre la copia local**
+- Diagnóstico con fecha y hora: el correo cambió en `saa_` el 2026-09-09 a las
+  00:33 y el aviso del Anexo 4 de la 01:03 se fue igual a la dirección anterior.
+  Está en `cmn.NotificacionAnexo4` de la base desplegada.
+- El token del SSO **no trae el correo**: sólo acredita la cuenta. El correo sale
+  del padrón (`login.fn_listar_login_usuario_perfil_sistema_sgcm`), que sí lo
+  devuelve, y de ahí a `sigcm.Usuario`.
+- Tres cambios: refresco antes de notificar (`RefrescarPadronSso` en los tres
+  endpoints que mandan correo), worker `PadronSso` cada 15 min —apagado por
+  defecto, se enciende en el desplegado— y `paPrepararNotificacionOrden`
+  resolviendo contra `sigcm.Usuario` con la copia congelada sólo como respaldo.
+- `sigcm.paSincronizarPadronSso` toma ahora un `sp_getapplock` de transacción:
+  con el worker corriendo solo, el solape con un ingreso deja de ser raro.
+- `S913` comprueba los cuatro casos y se verificó que **falla** con la versión
+  anterior de `F010`. El guion manual, en `pruebas/PRUEBAS_FLUJO_COMPLETO.md`
+  §5 ter, tiene en cuenta que el SSO de desarrollo redirige al desplegado y no a
+  `localhost:4200`.
 
 **2026-09-03 (tarde) · El flujo completo y la firma sin dispositivo**
 - `S019` crea `REQ_REGISTRAR_CCP` (`REQ_CCP_SOLICITADO` → `REQ_CCP_CARGADA`, DEC)

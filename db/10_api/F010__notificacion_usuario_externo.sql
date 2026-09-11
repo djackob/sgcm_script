@@ -55,13 +55,30 @@ BEGIN
                @IdExpediente = r.IdExpediente,
                @NumeroOrden = o.NumeroOrden,
                @CorreoLocador = o.CorreoLocador,
-               @CorreoAu = o.CorreoAreaUsuaria,
+               /* El correo del area usuaria se resuelve CONTRA sigcm.Usuario en
+                  el momento de notificar, no contra la copia que quedo grabada
+                  en OrdenServicio al registrar la orden.
+
+                  POR QUE. Ese correo lo gobierna el SSO y alli cambia. Entre el
+                  registro de la orden y su notificacion pueden pasar semanas, y
+                  leer la copia congelada hacia que el aviso siguiera yendo a la
+                  bandeja anterior aunque el padron local ya estuviera al dia.
+
+                  IdResponsable es estable: lo fija paRegistrarRequerimiento con
+                  quien registro y no se mueve despues, asi que identifica al
+                  area usuaria aunque el expediente ya este en Abastecimiento.
+
+                  La copia sigue siendo el respaldo. Si la persona se dio de baja
+                  en el SSO y ya no tiene correo vigente, se usa la que quedo
+                  grabada: avisar a la direccion vieja es mejor que no avisar. */
+               @CorreoAu = COALESCE(NULLIF(LTRIM(RTRIM(au.Correo)), ''), o.CorreoAreaUsuaria),
                @Version = e.Version,
                @Estado = e.CodigoEstado,
                @Datos = r.DatosAdicionales
           FROM requerimiento.Requerimiento AS r
           JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
           JOIN requerimiento.OrdenServicio AS o ON o.IdRequerimiento = r.IdRequerimiento AND o.Activo = 1
+          LEFT JOIN sigcm.Usuario AS au ON au.IdUsuario = r.IdResponsable AND au.Activo = 1
          WHERE r.IdRequerimiento = @IdRequerimiento AND r.Activo = 1;
 
         IF @Codigo IS NULL

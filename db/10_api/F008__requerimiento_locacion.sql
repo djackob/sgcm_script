@@ -910,13 +910,18 @@ BEGIN
                @IdExpediente = r.IdExpediente,
                @NumeroOrden = o.NumeroOrden,
                @CorreoLocador = o.CorreoLocador,
-               @CorreoAu = o.CorreoAreaUsuaria,
+               /* El correo del area usuaria se resuelve contra sigcm.Usuario al
+                  notificar, no contra la copia congelada en OrdenServicio. El
+                  motivo completo esta en F010, que redefine esta rutina; aqui
+                  va igual para que las dos versiones no discrepen. */
+               @CorreoAu = COALESCE(NULLIF(LTRIM(RTRIM(au.Correo)), ''), o.CorreoAreaUsuaria),
                @Version = e.Version,
                @Estado = e.CodigoEstado,
                @Datos = r.DatosAdicionales
           FROM requerimiento.Requerimiento AS r
           JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
           JOIN requerimiento.OrdenServicio AS o ON o.IdRequerimiento = r.IdRequerimiento AND o.Activo = 1
+          LEFT JOIN sigcm.Usuario AS au ON au.IdUsuario = r.IdResponsable AND au.Activo = 1
          WHERE r.IdRequerimiento = @IdRequerimiento AND r.Activo = 1;
 
         IF @Codigo IS NULL
