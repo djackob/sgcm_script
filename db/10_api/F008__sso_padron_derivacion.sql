@@ -318,6 +318,59 @@ BEGIN
         BEGIN TRANSACTION; SET @TranPropia = 1;
 
         /*
+          UN SOLO RECONCILIADOR A LA VEZ.
+
+          Antes solo disparaba el ingreso, y dos personas entrando al mismo
+          segundo era raro. Desde que PadronSsoWorker reconcilia cada quince
+          minutos sin que nadie apriete nada, el solape deja de ser raro: la
+          corrida programada puede caer encima de un ingreso o de una
+          notificacion.
+
+          Las tres operaciones son las mismas filas -alta, actualizacion y
+          CIERRE de asignaciones-, y el cierre es el peligroso: dos sesiones
+          recorriendo UsuarioRol en orden distinto es la receta del interbloqueo.
+
+          El candado pertenece a la TRANSACCION, asi que se suelta solo en el
+          COMMIT y tambien en el ROLLBACK del CATCH. No hay que liberarlo a mano.
+
+          Si no se consigue en diez segundos es que otra corrida ya esta
+          haciendo exactamente este trabajo. Entonces no se reintenta ni se
+          encola: se sale diciendolo. Reconciliar dos veces seguidas el mismo
+          padron no agrega nada, y el llamador -ingreso o notificacion- no debe
+          esperar por algo que ya esta pasando.
+        */
+        DECLARE @Candado int;
+
+        EXEC @Candado = sp_getapplock
+             @Resource = 'SIGCM:SincronizarPadronSso',
+             @LockMode = 'Exclusive',
+             @LockOwner = 'Transaction',
+             @LockTimeout = 10000;
+
+        IF @Candado < 0
+        BEGIN
+            ROLLBACK TRANSACTION; SET @TranPropia = 0;
+
+            SELECT @resultado = (
+                SELECT 1 AS estado,
+                       'Otra sincronizacion del padron ya estaba en curso. No se reconcilio nada.' AS mensaje,
+                       Resumen = JSON_QUERY((
+                           SELECT PadronRecibido   = @Recibidos,
+                                  UnidadesAlta     = 0,
+                                  UsuariosAlta     = 0,
+                                  AsignacionesAlta = 0,
+                                  AsignacionesBaja = 0,
+                                  Completo         = @Completo,
+                                  Omitida          = CONVERT(bit, 1)
+                           FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)),
+                       Descartes = JSON_QUERY('[]')
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+
+            SELECT @resultado;
+            RETURN;
+        END
+
+        /*
           El emparejamiento va por CENTRO DE COSTO antes que por el id del SSO,
           y ese orden importa: sigcm.Unidad puede haberse creado a mano o por
           S900 con su propio codigo -UO-UDS-, y el centro de costo es lo unico

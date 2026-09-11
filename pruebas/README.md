@@ -20,6 +20,8 @@ limpian solos— y el instalador los ignora a propósito:
 | `S909__datos_prueba_pago.sql` | Requerimiento con orden emitida y 3 entregables, locador persona jurídica, sin mora |
 | `S910__datos_prueba_pago_penalidad.sql` | Lo mismo con locador persona natural y un entregable con penalidad |
 | `S911__cmn_devolucion_au.sql` | Dos CMN parados antes de observarse: uno en Administración, otro en Abastecimiento |
+| `S912__pagos_entregables_presentados.sql` | Presenta los entregables de los expedientes de pago **ya abiertos** en la base, sin sembrar requerimientos. Para el servidor desplegado |
+| `S913__correo_sso_desfasado.sql` | **No siembra: comprueba.** Que el correo vigente del SSO gana a la copia congelada en la orden. Cuatro casos, `ROLLBACK` al final |
 | `S900`, `S901`–`S908` | Datos de acceso local y pruebas de CMN contra SIGA, de iteraciones anteriores |
 
 Y el **porqué** de cada tramo está en los documentos de análisis, que no son
