@@ -11,6 +11,7 @@
 ===============================================================================
 */
 
+:setvar bdSiga "SIGA_1750"
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
@@ -25,7 +26,7 @@ SELECT TOP 1 @bdSiga = PARSENAME(base_object_name, 3)
    AND name = N'usp_ext_incluir_item_cmn';
 
 IF @bdSiga IS NULL
-    SET @bdSiga = N'SIGA_1750';
+    SET @bdSiga = N'$(bdSiga)';
 
 DECLARE @obj nvarchar(512) = @bdSiga + N'.dbo.usp_ext_crear_cuadro_adquisicion_desde_pedido';
 

@@ -69,6 +69,7 @@ param(
     [string]$Base           = "DBSIGCM",
     [string]$BaseSiga       = "SIGA_1750",
     [string]$Usuario        = "",
+    [string]$LoginApp       = "",
     [switch]$Recrear,
     [switch]$ConDatosPrueba,
     [switch]$SoloVerificar,
@@ -232,7 +233,8 @@ if ($SoloVerificar) {
     exit 0
 }
 
-$varSiga = @("bdSiga=$BaseSiga")
+$loginVar = if ([string]::IsNullOrWhiteSpace($LoginApp)) { "-" } else { $LoginApp }
+$varSiga = @("bdSiga=$BaseSiga", "bdSigcm=$Base", "loginApp=$loginVar")
 
 function Probar-Instancia([string]$instancia) {
     $argumentos = @("-S", $instancia, "-d", "master", "-b", "-h", "-1", "-W",
@@ -293,6 +295,10 @@ if (-not $OmitirSigaExt) {
     foreach ($archivo in $sigaExt) {
         if (-not (Ejecutar $archivo.FullName $BaseSiga $varSiga)) { exit 1 }
     }
+    $c002b = Join-Path $raiz "00_servidor\C002B__ejecutar_usp_ext_siga.sql"
+    if (Test-Path $c002b) {
+        if (-not (Ejecutar $c002b "master" $varSiga)) { exit 1 }
+    }
 }
 else {
     Escribir "  OmitirSigaExt: no se reaplican usp_ext_* sobre $BaseSiga." "Yellow"
@@ -317,7 +323,9 @@ $patrones = @(
 
 foreach ($patron in $patrones) {
     $ruta = Join-Path $raiz $patron
-    $archivos = @(Get-ChildItem -Path $ruta -ErrorAction SilentlyContinue | Sort-Object Name)
+    $archivos = @(Get-ChildItem -Path $ruta -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -notlike '_tmp*' } |
+                  Sort-Object Name)
     if ($archivos.Count -eq 0) {
         Escribir ("     (sin archivos en {0})" -f $patron) "DarkGray"
         continue

@@ -22,10 +22,14 @@
 
 SET NOCOUNT ON;
 
-/* Nombre de la base SIGA. En produccion muy probablemente NO sea SIGA_1750:
-   ese nombre codifica la ejecutora 1750. Se puede sobreescribir con -v bdSiga=. */
-DECLARE @bdSiga sysname = N'SIGA_1750';
-DECLARE @bdSigcm sysname = N'DBSIGCM';
+:setvar bdSiga "SIGA_1750"
+:setvar bdSigcm "DBSIGCM"
+
+/* Nombre de la base SIGA. En calidad/produccion muy probablemente NO sea
+   SIGA_1750: ese nombre codifica la ejecutora 1750. Sobreescribir con
+   -v bdSiga="<nombre real>" y -v bdSigcm="<nombre SIGCM>". */
+DECLARE @bdSiga sysname = N'$(bdSiga)';
+DECLARE @bdSigcm sysname = N'$(bdSigcm)';
 
 /* Linea base del proyecto: SQL Server 2022 = 16.0, confirmado por el equipo como
    la version del servidor de produccion del ANIN. Antes de esa confirmacion la

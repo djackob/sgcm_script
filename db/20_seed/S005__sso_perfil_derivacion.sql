@@ -64,7 +64,9 @@ INSERT INTO @Perfil VALUES
   ('PE087', 'JEFE UC',              'CONTABILIDAD',       N'Control previo y devengado. Modulo de Pago.'),
   ('PE088', 'ESPECIALISTA UC',      'CONTABILIDAD',       N'Control previo y devengado. Modulo de Pago.'),
   ('PE089', 'JEFE UT',              'TESORERIA',          N'Giro y pago. Modulo de Pago.'),
-  ('PE090', 'ESPECIALISTA UT',      'TESORERIA',          N'Giro y pago. Modulo de Pago.');
+  ('PE090', 'ESPECIALISTA UT',      'TESORERIA',          N'Giro y pago. Modulo de Pago.'),
+  /* --- Portal externo SGCM-E (locador). Sistema S0078, no el 73. ----------- */
+  ('PE010', 'ADMINISTRADO_EXT',     'PROVEEDOR',          N'Locador en portal SGCM-E. El SSO manda PE010; ADMINISTRADO_EXT es el nombre.');
 
 UPDATE d
    SET d.NombreSso = s.NombreSso, d.CodigoRol = s.CodigoRol, d.Observacion = s.Observacion

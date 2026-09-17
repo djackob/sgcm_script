@@ -190,9 +190,6 @@ BEGIN
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
 
-        IF @CodigoRol NOT IN ('ABAST_ESPECIALISTA')
-            THROW 51811, 'NO_AUTORIZADO: los filtros de idoneidad los registra el especialista de Abastecimiento.', 1;
-
         DECLARE @IdRequerimiento uniqueidentifier =
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdRequerimiento'));
 
@@ -204,6 +201,22 @@ BEGIN
           FROM requerimiento.Requerimiento AS r
           JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
          WHERE r.IdRequerimiento = @IdRequerimiento;
+
+        /* Jefe / secretaria / coordinador revisan o confirman; no editan el
+           catalogo. Si el front aun llama a registrar (build viejo), se responde
+           OK sin tocar filas para no bloquear REQ_CONFIRMAR_FILTROS. */
+        IF @CodigoRol IN ('ABAST_JEFE', 'ABAST_SECRETARIA', 'ABAST_COORDINADOR')
+        BEGIN
+            SELECT @resultado = (
+                SELECT 1 AS estado,
+                       N'Los filtros ya estan registrados; en esta etapa no se modifican.' AS mensaje
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+            SELECT @resultado;
+            RETURN;
+        END
+
+        IF @CodigoRol <> 'ABAST_ESPECIALISTA'
+            THROW 51811, 'NO_AUTORIZADO: los filtros de idoneidad los registra el especialista de Abastecimiento.', 1;
 
         IF @EstadoActual <> 'REQ_FILTROS'
             THROW 51813, 'CONFLICTO_ESTADO: los filtros solo se editan mientras el expediente esta con el especialista.', 1;
@@ -357,6 +370,15 @@ BEGIN
                            OR LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)) = ''))
             THROW 51826, 'VALIDACION_IDONEIDAD: adjunte la evidencia PDF de cada filtro antes de derivar.', 1;
 
+        IF NOT EXISTS (
+            SELECT 1
+              FROM sigcm.Documento AS d
+              JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+             WHERE de.IdExpediente = @IdExpediente
+               AND d.CodigoTipoDocumento = N'REQ_EVAL_CUMPLIMIENTO_TDR'
+               AND d.Anulado = 0 AND d.Activo = 1)
+            THROW 51830, 'VALIDACION_IDONEIDAD: adjunte la evaluacion de cumplimiento del TDR (matriz/Excel en PDF) antes de derivar.', 1;
+
         SET @parametro = JSON_MODIFY(@parametro, '$.IdExpediente', CONVERT(nvarchar(36), @IdExpediente));
         SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', @CodigoTransicion);
         IF JSON_VALUE(@parametro, '$.Version') IS NULL
@@ -402,8 +424,11 @@ BEGIN
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
 
-        IF @CodigoRol NOT IN ('ABAST_ESPECIALISTA', 'ABAST_COORDINADOR', 'ABAST_JEFE')
-            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP la confirma Abastecimiento (DEC).', 1;
+        /* Solo el jefe (o secretaria con su permiso) cierra filtros: S005 fija
+           REQ_CONFIRMAR_FILTROS con origen REQ_FILTROS_JEFE. El especialista
+           completa en REQ_FILTROS y deriva al coordinador; el coordinador al jefe. */
+        IF @CodigoRol NOT IN ('ABAST_JEFE', 'ABAST_SECRETARIA')
+            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP la confirma el jefe de Abastecimiento (DEC).', 1;
 
         DECLARE @IdRequerimiento uniqueidentifier =
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdRequerimiento'));
@@ -426,8 +451,8 @@ BEGIN
           FROM sigcm.Expediente AS e
          WHERE e.IdExpediente = @IdExpediente;
 
-        IF @EstadoFiltro NOT IN ('REQ_FILTROS', 'REQ_FILTROS_JEFE')
-            THROW 51828, 'CONFLICTO_ESTADO: la solicitud de CCP solo procede en la etapa de filtros de idoneidad.', 1;
+        IF @EstadoFiltro <> 'REQ_FILTROS_JEFE'
+            THROW 51828, 'CONFLICTO_ESTADO: confirme idoneidad y solicite CCP cuando el expediente este en revision del jefe (REQ_FILTROS_JEFE). Desde REQ_FILTROS el especialista debe enviar los filtros al coordinador.', 1;
 
         /* Misma siembra que paListarFiltroIdoneidad: si el especialista confirma
            desde la bandeja sin abrir el detalle, los registros deben existir. */
@@ -491,6 +516,15 @@ BEGIN
                       AND (f.GeneradoDocumentoEvidencia IS NULL
                            OR LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)) = ''))
             THROW 51826, 'VALIDACION_IDONEIDAD: adjunte la evidencia PDF de SUNAT, RNP y de cada filtro de la matriz.', 1;
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM sigcm.Documento AS d
+              JOIN sigcm.DocumentoExpediente AS de ON de.IdDocumento = d.IdDocumento
+             WHERE de.IdExpediente = @IdExpediente
+               AND d.CodigoTipoDocumento = N'REQ_EVAL_CUMPLIMIENTO_TDR'
+               AND d.Anulado = 0 AND d.Activo = 1)
+            THROW 51831, 'VALIDACION_IDONEIDAD: falta la evaluacion de cumplimiento del TDR (matriz/Excel en PDF) para confirmar la idoneidad.', 1;
 
         DECLARE @CuerpoMemorando nvarchar(max);
         DECLARE @DocMemo nvarchar(1000) = JSON_VALUE(@parametro, '$.GeneradoDocumentoMemo');

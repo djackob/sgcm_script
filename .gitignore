@@ -1,5 +1,10 @@
-# Bitacoras que deja instalar.ps1 en cada corrida. Son de la maquina que
-# instalo, no del proyecto.
+# Parametros locales del pase a calidad (servidor, logins). Nunca versionar.
+pase/parametros.ps1
+
+# SQL concatenados del pase (se regeneran con generar_sql.ps1 / empacar_pase.ps1)
+pase/01_SIGA.sql
+pase/02_DBSIGCM.sql
+pase/03_SSO.sql
 _bitacora/
 *.log
 

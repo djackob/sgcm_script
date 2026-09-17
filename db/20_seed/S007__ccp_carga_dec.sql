@@ -38,9 +38,7 @@ GO
 INSERT INTO sigcm.TransicionRol (CodigoTransicion, CodigoRol)
 SELECT v.CodigoTransicion, v.CodigoRol
   FROM (VALUES
-    ('REQ_REGISTRAR_CCP', 'ABAST_ESPECIALISTA'),
-    ('REQ_REGISTRAR_CCP', 'ABAST_COORDINADOR'),
-    ('REQ_REGISTRAR_CCP', 'ABAST_JEFE')
+    ('REQ_REGISTRAR_CCP', 'ABAST_ESPECIALISTA')
   ) AS v(CodigoTransicion, CodigoRol)
  WHERE NOT EXISTS (
        SELECT 1 FROM sigcm.TransicionRol AS d

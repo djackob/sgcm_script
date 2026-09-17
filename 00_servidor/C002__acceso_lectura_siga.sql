@@ -13,7 +13,7 @@
   que el SIGCM se conecta necesita SELECT explicito sobre las tablas de origen.
 
   ESTE ES UN CAMBIO DENTRO DE SIGA Y REQUIERE AUTORIZACION DEL PROPIETARIO.
-  Es el minimo posible: un rol de base, SELECT sobre catorce tablas nominadas,
+  Es el minimo posible: un rol de base, SELECT sobre las tablas nominadas,
   cero permisos de escritura, cero db_datareader, cero cambios de esquema.
   Aun asi, no se ejecuta sin permiso.
 
@@ -29,7 +29,7 @@
 
   Uso:
     sqlcmd -S "<servidor>" -d master -E ^
-           -v bdSiga="SIGA_1750" login="ANIN\svc_sigcm" ^
+           -v bdSiga="SIGA_1750" -v loginApp="ANIN\svc_sigcm" ^
            -i C002__acceso_lectura_siga.sql
 ===============================================================================
 */
@@ -37,11 +37,18 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @bdSiga  sysname = N'SIGA_1750';
-DECLARE @bdSigcm sysname = N'DBSIGCM';
+:setvar bdSiga "SIGA_1750"
+:setvar bdSigcm "DBSIGCM"
+:setvar loginApp "-"
 
-/* Login ya existente al que se le concede el acceso. Debe crearlo el DBA. */
-DECLARE @login sysname = N'';   /* p.ej. N'ANIN\svc_sigcm' */
+DECLARE @bdSiga  sysname = N'$(bdSiga)';
+DECLARE @bdSigcm sysname = N'$(bdSigcm)';
+
+/* Login ya existente al que se le concede el acceso. Debe crearlo el DBA.
+   Pasar -v loginApp="ANIN\svc_sigcm" o el login SQL de la aplicacion.
+   El valor "-" (defecto) no concede el rol a nadie: solo crea el rol. */
+DECLARE @login sysname = N'$(loginApp)';
+IF @login IN (N'', N'-') SET @login = N'';
 
 DECLARE @rol sysname = N'sigcm_lector_siga';
 
@@ -76,7 +83,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @rol AND type 
 EXEC sys.sp_executesql @sql, N'@rol sysname', @rol = @rol;
 
 /* -------------------------------------------------------------------------- */
-/* 2. SELECT sobre las catorce tablas de origen, una por una                  */
+/* 2. SELECT sobre las tablas de origen, una por una                          */
 /* -------------------------------------------------------------------------- */
 
 /* Se enumeran a proposito en vez de conceder db_datareader: el SIGCM solo debe
@@ -91,6 +98,7 @@ INSERT INTO @tablas (tabla) VALUES
     (N'FUENTE_FINANC_EJEC'),
     (N'FUENTE_FINANC'),
     (N'SIG_CENTRO_COSTO_TAREA'),
+    (N'SIG_METAS_X_CENTRO'),
     (N'UNIDAD_MEDIDA'),
     (N'CATALOGO_BIEN_SERV'),
     (N'SIG_TECHO_PRESUPUESTO'),
@@ -99,7 +107,20 @@ INSERT INTO @tablas (tabla) VALUES
     (N'SIG_CUADRO_MODIFICADO_SALDO'),
     (N'SIG_CUADRO_MODIFICADO_CMN'),
     (N'SIG_CUADRO_X_CENTRO'),
-    (N'SIG_PARAMETRO_EJECUTORA_ANIO');
+    (N'SIG_PARAMETRO_EJECUTORA_ANIO'),
+    (N'SIG_PEDIDOS'),
+    (N'SIG_DETALLE_PEDIDOS'),
+    (N'SIG_CUADRO_ADQUISICION'),
+    (N'SIG_DETALLE_PEDIDO_CUADRO'),
+    (N'SIG_DETALLE_BSERV_CUADRO'),
+    (N'SIG_DETALLE_ANEXO_CUADRO'),
+    (N'SIG_DETALLE_PEDIDOS_ANEXO'),
+    (N'SIG_ORDEN_ITEM'),
+    (N'SIG_ORDEN_ITEM_ANEXO'),
+    (N'SIG_ORDEN_ADQUISICION'),
+    (N'SIG_ORDEN_INTERFASE'),
+    (N'SIG_CONTRATISTAS'),
+    (N'ACT_PROY_NOMBRE');
 
 DECLARE @tabla sysname;
 DECLARE cur CURSOR LOCAL FAST_FORWARD FOR SELECT tabla FROM @tablas ORDER BY tabla;
@@ -121,7 +142,7 @@ DEALLOCATE cur;
    otro con mas permisos, DENY gana. */
 SET @sql = N'
 USE ' + QUOTENAME(@bdSiga) + N';
-DENY INSERT, UPDATE, DELETE, ALTER, EXECUTE TO ' + QUOTENAME(@rol) + N';
+DENY INSERT, UPDATE, DELETE, ALTER TO ' + QUOTENAME(@rol) + N';
 ';
 EXEC sys.sp_executesql @sql;
 

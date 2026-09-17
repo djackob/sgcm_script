@@ -46,9 +46,12 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
+:setvar bdSiga "SIGA_1750"
+:setvar bdSigcm "DBSIGCM"
+
 DECLARE @confirmacion nvarchar(20) = N'$(recrear)';
-DECLARE @bdSiga  sysname = N'SIGA_1750';
-DECLARE @bdSigcm sysname = N'DBSIGCM';
+DECLARE @bdSiga  sysname = N'$(bdSiga)';
+DECLARE @bdSigcm sysname = N'$(bdSigcm)';
 
 IF UPPER(@confirmacion) <> N'SI'
 BEGIN

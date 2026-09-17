@@ -686,7 +686,8 @@ BEGIN
                anterior pedia en dos HTTP al elegir un N°: la tarea del centro
                (listarCentroCostoTarea) y el resumen concatenado de items
                (listarItemsPedidoResumen). Solo lineas del tipo de bien del
-               objeto: locacion no mezcla compras. */
+               objeto: locacion no mezcla compras. TipoActProy / NombreActProy
+               salen de ACT_PROY_NOMBRE (CUI tipo 2 o idea tipo 0) para el TDR. */
             DECLARE @IdUsuarioPed      uniqueidentifier,
                     @CuentaPed         varchar(120),
                     @NombrePed         varchar(250),
@@ -765,13 +766,18 @@ BEGIN
                            t.NombreTarea,
                            i.CodigoItem,
                            i.NombreItem,
-                           i.Clasificador
+                           i.Clasificador,
+                           TipoActProy = CONVERT(varchar(1), ap.tipo_act_proy) COLLATE DATABASE_DEFAULT,
+                           NombreActProy = CONVERT(varchar(250), ap.nombre) COLLATE DATABASE_DEFAULT
                       FROM siga.vwPedido AS p
                       LEFT JOIN siga.vwTarea AS t
                              ON t.AnoEje      = p.AnoEje
                             AND t.SecEjec     = p.SecEjec
                             AND t.CentroCosto = p.CentroCosto
                             AND t.CodigoTarea = p.CodigoTarea
+                      LEFT JOIN siga.ACT_PROY_NOMBRE AS ap WITH (NOLOCK)
+                             ON ap.ANO_EJE = p.AnoEje
+                            AND ap.act_proy COLLATE DATABASE_DEFAULT = p.ActProy
                       OUTER APPLY (
                             SELECT CodigoItem   = STRING_AGG(CONVERT(varchar(max), x.CodigoItem),   ', ')
                                                       WITHIN GROUP (ORDER BY x.Secuencia),

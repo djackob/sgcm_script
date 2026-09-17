@@ -47,11 +47,14 @@ IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_integracion_Ope
     ALTER TABLE integracion.Operacion DROP CONSTRAINT CK_integracion_Operacion_Operacion;
 GO
 
+/* Vocabulario completo (V023/V032 inclusive): al reaplicar sobre una base ya
+   avanzada no puede restringirse a solo CREAR_ORDEN_SERVICIO o falla el 547. */
 ALTER TABLE integracion.Operacion
     ADD CONSTRAINT CK_integracion_Operacion_Operacion
         CHECK (Operacion IN (
             'INCLUIR_ITEM','EXCLUIR_ITEM','MODIFICAR_CANTIDADES',
-            'CONSOLIDAR_CMN','CREAR_ORDEN_SERVICIO'));
+            'CONSOLIDAR_CMN','CREAR_CUADRO_ADQUISICION',
+            'CREAR_ORDEN_SERVICIO','REGISTRAR_RECEPCION_OS'));
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_integracion_Operacion_Origen')
@@ -62,7 +65,7 @@ ALTER TABLE integracion.Operacion
              AND Operacion IN ('INCLUIR_ITEM','EXCLUIR_ITEM','MODIFICAR_CANTIDADES','CONSOLIDAR_CMN'))
             OR
             (IdSolicitud IS NULL AND IdRequerimiento IS NOT NULL
-             AND Operacion = 'CREAR_ORDEN_SERVICIO')
+             AND Operacion IN ('CREAR_CUADRO_ADQUISICION','CREAR_ORDEN_SERVICIO','REGISTRAR_RECEPCION_OS'))
         );
 GO
 

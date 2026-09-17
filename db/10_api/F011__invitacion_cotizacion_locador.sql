@@ -94,31 +94,103 @@ BEGIN
             THROW 51875, 'VALIDACION_CORREO: el locador no tiene correo en el Anexo 5. Completelo antes de invitar.', 1;
 
         DECLARE @PlazoHasta date = sigcm.fnSumarDiasHabiles(CONVERT(date, GETDATE()), 3);
+
+        /* Especialista que dispara la invitacion: va en copia y en el cuerpo. */
+        DECLARE @CorreoEspecialista varchar(200), @NombreEspecialista varchar(250),
+                @CargoEspecialista varchar(180);
+        SELECT @CorreoEspecialista = NULLIF(LTRIM(RTRIM(u.Correo)), ''),
+               @NombreEspecialista = COALESCE(
+                   NULLIF(LTRIM(RTRIM(@NombreCompleto)), ''),
+                   NULLIF(LTRIM(RTRIM(CONCAT(u.Nombres, N' ', u.Apellidos))), '')),
+               @CargoEspecialista = COALESCE(
+                   NULLIF(LTRIM(RTRIM(@Cargo)), ''),
+                   NULLIF(LTRIM(RTRIM(u.Cargo)), ''),
+                   N'Especialista de contratos menores')
+          FROM sigcm.Usuario AS u
+         WHERE u.IdUsuario = @IdUsuario;
+
+        IF @CorreoEspecialista IS NULL
+            SET @CorreoEspecialista = NULLIF(LTRIM(RTRIM(
+                JSON_VALUE(@parametro, '$.Actor.Correo'))), '');
+
         /* Textos con NCHAR: evita mojibake si sqlcmd aplica el .sql sin UTF-8. */
         DECLARE @o nchar(1) = NCHAR(0x00F3); /* o aguda */
         DECLARE @i nchar(1) = NCHAR(0x00ED); /* i aguda */
         DECLARE @a nchar(1) = NCHAR(0x00E1); /* a aguda */
         DECLARE @e nchar(1) = NCHAR(0x00E9); /* e aguda */
         DECLARE @u nchar(1) = NCHAR(0x00FA); /* u aguda */
-        DECLARE @n nchar(1) = NCHAR(0x00F1); /* ene */
+        DECLARE @UMay nchar(1) = NCHAR(0x00DA); /* U aguda */
+        DECLARE @OMay nchar(1) = NCHAR(0x00D3); /* O aguda */
+        /* 1900-01-01 fue lunes: el resto de 7 es independiente de DATEFIRST. */
+        DECLARE @Dia nvarchar(20) = CASE (DATEDIFF(day, '19000101', @PlazoHasta) % 7)
+            WHEN 0 THEN N'Lunes'
+            WHEN 1 THEN N'Martes'
+            WHEN 2 THEN CONCAT(N'Mi', @e, N'rcoles')
+            WHEN 3 THEN N'Jueves'
+            WHEN 4 THEN N'Viernes'
+            WHEN 5 THEN CONCAT(N'S', @a, N'bado')
+            WHEN 6 THEN N'Domingo'
+        END;
+        DECLARE @FechaPlazo nvarchar(60) = CONCAT(
+            @Dia, N' ', CONVERT(varchar(10), @PlazoHasta, 105));
+        DECLARE @DenominacionHtml nvarchar(max) = REPLACE(REPLACE(REPLACE(
+            ISNULL(@Denominacion, N''), N'&', N'&amp;'), N'<', N'&lt;'), N'>', N'&gt;');
+        DECLARE @Observacion nvarchar(max) = NULLIF(LTRIM(RTRIM(
+            JSON_VALUE(@parametro, '$.Observacion'))), N'');
+        DECLARE @BloqueObs nvarchar(max) = N'';
+        IF @Observacion IS NOT NULL
+        BEGIN
+            SET @Observacion = LEFT(@Observacion, 2000);
+            SET @Observacion = REPLACE(REPLACE(REPLACE(@Observacion, N'&', N'&amp;'), N'<', N'&lt;'), N'>', N'&gt;');
+            SET @Observacion = REPLACE(REPLACE(@Observacion, CHAR(13) + CHAR(10), N'<br/>'), CHAR(10), N'<br/>');
+            SET @BloqueObs = CONCAT(
+                N'<p><b>Observaci', @o, N'n:</b><br/>', @Observacion, N'</p>');
+        END
         DECLARE @Asunto nvarchar(300) = CONCAT(
             N'Solicitud de cotizaci', @o, N'n - ', ISNULL(@Codigo, N''), N' - ', @Denominacion);
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
-            N'<p>Estimado/a <b>', ISNULL(@NombreLocador, N'locador'), N'</b>:</p>',
-            N'<p>La Autoridad Nacional de Infraestructura le invita a presentar su cotizaci', @o, N'n ',
-            N'para el requerimiento <b>', @Codigo, N'</b> (locaci', @o, N'n de servicios, invitaci', @o, N'n directa).</p>',
-            N'<p><b>Denominaci', @o, N'n:</b> ', @Denominacion, N'</p>',
-            N'<p>Adjunto encontrar', @a, N' el paquete digital:</p>',
-            N'<ol>',
-            N'<li>Anexo 3 - T', @e, N'rminos de Referencia (TDR) aprobados</li>',
-            N'<li>Anexo 6 - Formato de cotizaci', @o, N'n y declaraci', @o, N'n jurada del proveedor (CCI y monto a dos decimales)</li>',
-            N'<li>Anexo 7 - Declaraci', @o, N'n jurada de prohibiciones e incompatibilidades</li>',
-            N'<li>Instructivo para denunciar presuntos actos de corrupci', @o, N'n y Pol', @i, N'tica de Integridad y Antisoborno de la ANIN</li>',
-            N'</ol>',
-            N'<p>El plazo m', @a, N'ximo de respuesta es de <b>tres (3) d', @i, N'as h', @a, N'biles</b>, hasta el <b>',
-            CONVERT(varchar(10), @PlazoHasta, 103),
-            N'</b>. Debe devolver los Anexos 6 y 7 firmados.</p>',
-            N'<p>Autoridad Nacional de Infraestructura - Unidad de Abastecimiento (DEC)</p>');
+            N'<p>Estimado/a proveedor/a</p>',
+            N'<p>Es grato dirigirle la presente a efectos de comunicarle que la Autoridad Nacional de Infraestructura le invita a formular su propuesta T',
+            @e, N'cnica-Econ', @o, N'mica con el fin de contar con una cotizaci', @o,
+            N'n formal para la siguiente contrataci', @o, N'n:</p>',
+            N'<p><b>SERVICIO/ADQUISICI', @OMay, N'N:</b><br/>', @DenominacionHtml, N'</p>',
+            @BloqueObs,
+            N'<p><b>NOTAS IMPORTANTES:</b></p>',
+            N'<ul>',
+            N'<li>Encontrarse con Registro Nacional de Proveedores vigente.</li>',
+            N'<li>No estar impedido de contratar con el estado.</li>',
+            N'<li>De requerir visita t', @e, N'cnica, solicitarla.</li>',
+            N'<li>De tener consultas y/u observaciones, comunicadas por este medio a efectos de solicitar al ',
+            @a, N'rea correspondiente la absoluci', @o, N'n de las mismas.</li>',
+            N'<li>De no estar en condiciones de cotizar, favor de indicar que no es posible atender nuestra solicitud.</li>',
+            N'<li>Para poder cotizar deber', @a, N' contar con la actividad econ', @o,
+            N'mica del rubro cotizado (RUC).</li>',
+            N'<li>Adjuntar en formato PDF, los FORMATOS DE DECLARACI', @OMay,
+            N'N JURADA, debidamente llenados y firmados (anexos adjuntos).</li>',
+            N'<li>Para que la cotizaci', @o, N'n sea catalogada como v', @a,
+            N'lida se deber', @a, N' indicar en la misma lo siguiente:</li>',
+            N'</ul>',
+            N'<p><b>EN CASO DE SERVICIOS:</b></p>',
+            N'<ul>',
+            N'<li>Adjuntar la documentaci', @o, N'n sustentatoria del cumplimiento de lo solicitado en los requisitos DEL PROVEEDOR seg',
+            @u, N'n los TDR (Constancias, Certificados, u otros, de ser el caso).</li>',
+            N'<li>Indicar el plazo de ejecuci', @o, N'n.</li>',
+            N'<li>Adjuntar la documentaci', @o, N'n sustentatoria del cumplimiento de lo solicitado en los REQUISITOS Y RECURSOS DEL/DE LA PROVEEDOR/A seg',
+            @u, N'n los TDR.</li>',
+            N'</ul>',
+            N'<p style="color:#c00000;font-weight:bold;">ADJUNTAR ', @UMay, N'NICAMENTE LA DOCUMENTACI', @OMay,
+            N'N QUE ACREDITE LOS REQUISITOS ESTABLECIDOS EN EL REQUERIMIENTO.</p>',
+            N'<p style="color:#c00000;"><b>Fecha m', @a, N'xima de entrega de propuesta:</b> el d', @i,
+            N'a <b>', @FechaPlazo, N'</b></p>',
+            N'<p>Asimismo, compartimos con ustedes material informativo sobre la Pol', @i,
+            N'tica de Integridad y Antisoborno y un instructivo para la presentaci', @o,
+            N'n de denuncias por presuntos actos de corrupci', @o,
+            N'n, para su conocimiento y el fortalecimiento de la cultura de integridad en la ANIN.</p>',
+            N'<p>Se agradece responder el presente correo a <b>',
+            ISNULL(@CorreoEspecialista, N'[correo del especialista]'), N'</b></p>',
+            N'<p>Se agradece de antemano la atenci', @o, N'n que se sirva dar al presente.</p>',
+            N'<p>Atentamente,<br/><b>', ISNULL(@NombreEspecialista, N'Especialista de contratos menores'), N'</b><br/>',
+            ISNULL(@CargoEspecialista, N'Especialista de contratos menores'), N'</p>');
 
         SELECT @resultado = (
             SELECT 1 AS estado,
@@ -127,7 +199,7 @@ BEGIN
                    @Version AS Version,
                    @Estado AS CodigoEstado,
                    Destinatario = @Correo,
-                   Copia = CONVERT(varchar(200), NULL),
+                   Copia = @CorreoEspecialista,
                    Asunto = @Asunto,
                    Cuerpo = @Cuerpo,
                    PlazoHasta = CONVERT(varchar(10), @PlazoHasta, 23),

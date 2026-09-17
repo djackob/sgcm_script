@@ -17,6 +17,8 @@
 
 SET NOCOUNT ON;
 
+:setvar bdSiga "SIGA_1750"
+
 DECLARE @errores int = 0;
 
 /* -------------------------------------------------------------------------- */
@@ -26,7 +28,7 @@ DECLARE @errores int = 0;
 DECLARE @collation sysname = CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation'));
 DECLARE @compat int  = (SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID());
 DECLARE @rcsi   bit  = (SELECT is_read_committed_snapshot_on FROM sys.databases WHERE database_id = DB_ID());
-DECLARE @collSiga sysname = CONVERT(sysname, DATABASEPROPERTYEX(N'SIGA_1750', 'Collation'));
+DECLARE @collSiga sysname = CONVERT(sysname, DATABASEPROPERTYEX(N'$(bdSiga)', 'Collation'));
 
 SELECT N'1. BASE' AS bloque,
        DB_NAME()      AS base,
@@ -181,15 +183,18 @@ SELECT TOP 1 @bdSigaProc = PARSENAME(sy.base_object_name, 3)
   FROM sys.synonyms AS sy
  WHERE SCHEMA_NAME(sy.schema_id) = N'siga';
 IF @bdSigaProc IS NULL
-    SET @bdSigaProc = N'SIGA_1750';
+    SET @bdSigaProc = N'$(bdSiga)';
 
 DECLARE @procReq TABLE (nombre sysname NOT NULL PRIMARY KEY);
 INSERT INTO @procReq (nombre) VALUES
     (N'usp_ext_incluir_item_cmn'),
     (N'usp_ext_excluir_item_cmn'),
     (N'usp_ext_aprobar_solicitud_cmn'),
+    (N'usp_ext_registrar_item_cmn'),
+    (N'usp_ext_registrar_requerimiento'),
     (N'usp_ext_crear_cuadro_adquisicion_desde_pedido'),
-    (N'usp_ext_crear_orden_servicio_desde_cuadro');
+    (N'usp_ext_crear_orden_servicio_desde_cuadro'),
+    (N'usp_ext_registrar_recepcion_orden');
 
 SELECT N'5. SIGA USP_EXT' AS bloque,
        r.nombre,

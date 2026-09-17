@@ -22,8 +22,11 @@
 
 SET NOCOUNT ON;
 
-DECLARE @bdSiga  sysname = N'SIGA_1750';
-DECLARE @bdSigcm sysname = N'DBSIGCM';
+:setvar bdSiga "SIGA_1750"
+:setvar bdSigcm "DBSIGCM"
+
+DECLARE @bdSiga  sysname = N'$(bdSiga)';
+DECLARE @bdSigcm sysname = N'$(bdSigcm)';
 
 DECLARE @errores int = 0;
 DECLARE @avisos  int = 0;

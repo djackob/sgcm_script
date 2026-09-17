@@ -101,6 +101,7 @@
 ===============================================================================
 */
 
+:setvar bdSiga "SIGA_1750"
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
@@ -125,6 +126,9 @@ SELECT TOP 1 @bdSiga = PARSENAME(base_object_name, 3)
  WHERE SCHEMA_NAME(schema_id) = N'siga';
 
 IF @bdSiga IS NULL
+    SET @bdSiga = N'$(bdSiga)';
+
+IF @bdSiga IS NULL OR @bdSiga = N''
 BEGIN
     PRINT '  [AVISO] No hay sinonimos en el esquema siga. Ejecuta C003 antes que W001.';
 END

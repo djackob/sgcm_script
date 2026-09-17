@@ -31,7 +31,9 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @bdSiga sysname = N'SIGA_1750';
+:setvar bdSiga "SIGA_1750"
+
+DECLARE @bdSiga sysname = N'$(bdSiga)';
 
 IF DB_ID(@bdSiga) IS NULL
 BEGIN
@@ -52,7 +54,7 @@ GO
 
 SET NOCOUNT ON;
 
-DECLARE @bdSiga sysname = N'SIGA_1750';
+DECLARE @bdSiga sysname = N'$(bdSiga)';
 
 DECLARE @tablas TABLE (tabla sysname NOT NULL PRIMARY KEY);
 INSERT INTO @tablas (tabla) VALUES
@@ -93,7 +95,9 @@ INSERT INTO @tablas (tabla) VALUES
        estado real de la O/S (hitos 1 y 4). Ver siga.vwOrdenServicioSiga. */
     (N'SIG_ORDEN_ADQUISICION'),
     (N'SIG_ORDEN_INTERFASE'),
-    (N'SIG_CONTRATISTAS');
+    (N'SIG_CONTRATISTAS'),
+    /* Nombre de actividad/proyecto (CUI o idea) para el TDR Anexo 3. */
+    (N'ACT_PROY_NOMBRE');
 
 DECLARE @tabla sysname, @sql nvarchar(max), @creados int = 0;
 

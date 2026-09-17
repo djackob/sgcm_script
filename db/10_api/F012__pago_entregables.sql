@@ -826,8 +826,9 @@ BEGIN
         DECLARE @ForzarRhe bit = CASE WHEN JSON_VALUE(@parametro, '$.ForzarRheInvalido') IN ('true','1') THEN 1 ELSE 0 END;
         DECLARE @ForzarRend bit = CASE WHEN JSON_VALUE(@parametro, '$.ForzarRendicionPendiente') IN ('true','1') THEN 1 ELSE 0 END;
 
-        IF @Informe IS NULL OR @RhePdf IS NULL OR @RheXml IS NULL
-            THROW 51942, 'VALIDACION_DOCUMENTOS: el informe (PDF) y el RHE (PDF y XML) son obligatorios.', 1;
+        /* Reunion: solo Informe PDF + RHE PDF. El RHE XML deja de ser obligatorio. */
+        IF @Informe IS NULL OR @RhePdf IS NULL
+            THROW 51942, 'VALIDACION_DOCUMENTOS: el informe (PDF) y el RHE (PDF) son obligatorios.', 1;
 
         IF @ForzarRhe = 1
             THROW 51943, 'VALIDACION_SUNAT: el RHE no esta activo o no corresponde al RUC del locador.', 1;
@@ -849,6 +850,69 @@ BEGIN
 
         IF @Estado NOT IN ('PAG_PENDIENTE', 'PAG_OBSERVADO_AU')
             THROW 51946, 'CONFLICTO_ESTADO: el entregable no admite carga en el estado actual.', 1;
+
+        /* Ultimo entregable: si el TDR mapeo actividades por hito, la union
+           de IndicesActividades de todos los entregables debe cubrir el TDR.
+           TDRs antiguos sin IndicesActividades no se bloquean. */
+        DECLARE @IdRequerimiento uniqueidentifier, @NumeroEnt smallint, @MaxEnt smallint;
+        SELECT @IdRequerimiento = p.IdRequerimiento, @NumeroEnt = p.NumeroEntregable
+          FROM pago.ExpedientePago AS p
+         WHERE p.IdExpedientePago = @IdPago;
+
+        SELECT @MaxEnt = MAX(p2.NumeroEntregable)
+          FROM pago.ExpedientePago AS p2
+         WHERE p2.IdRequerimiento = @IdRequerimiento AND p2.Activo = 1;
+
+        IF @NumeroEnt IS NOT NULL AND @MaxEnt IS NOT NULL AND @NumeroEnt = @MaxEnt
+        BEGIN
+            DECLARE @IdExpReq uniqueidentifier, @PayloadTdr nvarchar(max);
+            SELECT @IdExpReq = r.IdExpediente
+              FROM requerimiento.Requerimiento AS r
+             WHERE r.IdRequerimiento = @IdRequerimiento AND r.Activo = 1;
+
+            SELECT TOP 1 @PayloadTdr = dv.Payload
+              FROM sigcm.DocumentoExpediente AS de
+              JOIN sigcm.Documento AS d ON d.IdDocumento = de.IdDocumento
+              JOIN sigcm.DocumentoVersion AS dv
+                ON dv.IdDocumento = d.IdDocumento AND dv.Version = d.VersionVigente
+             WHERE de.IdExpediente = @IdExpReq
+               AND d.CodigoTipoDocumento = 'REQ_TDR_LOCACION'
+               AND d.Anulado = 0 AND d.Activo = 1;
+
+            DECLARE @EntMap nvarchar(max) = COALESCE(
+                JSON_QUERY(@PayloadTdr, '$.Tdr.Entregables'),
+                JSON_QUERY(@PayloadTdr, '$.Entregables'));
+            DECLARE @ActMap nvarchar(max) = COALESCE(
+                JSON_QUERY(@PayloadTdr, '$.Tdr.Actividades'),
+                JSON_QUERY(@PayloadTdr, '$.Actividades'));
+
+            IF @EntMap IS NOT NULL AND ISJSON(@EntMap) = 1
+               AND @ActMap IS NOT NULL AND ISJSON(@ActMap) = 1
+               AND EXISTS (
+                    SELECT 1
+                      FROM OPENJSON(@EntMap) AS e
+                     CROSS APPLY OPENJSON(e.value, '$.IndicesActividades') AS ia
+               )
+            BEGIN
+                DECLARE @TotalAct int = (
+                    SELECT COUNT(*)
+                      FROM OPENJSON(@ActMap) AS a
+                     WHERE NULLIF(LTRIM(RTRIM(JSON_VALUE(a.value, '$.Descripcion'))), '') IS NOT NULL);
+
+                DECLARE @Cubiertas int = (
+                    SELECT COUNT(DISTINCT TRY_CONVERT(int, ia.value))
+                      FROM OPENJSON(@EntMap) AS e
+                     CROSS APPLY OPENJSON(e.value, '$.IndicesActividades') AS ia
+                     WHERE TRY_CONVERT(int, ia.value) IS NOT NULL
+                       AND TRY_CONVERT(int, ia.value) >= 0
+                       AND TRY_CONVERT(int, ia.value) < @TotalAct);
+
+                IF @TotalAct > 0 AND ISNULL(@Cubiertas, 0) < @TotalAct
+                    THROW 51947,
+                        'VALIDACION_ACTIVIDADES: el ultimo entregable debe completar la cobertura de todas las actividades del TDR. Revise el Anexo 3 (IndicesActividades por entregable).',
+                        1;
+            END
+        END
 
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @Tardia bit = 0;

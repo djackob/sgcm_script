@@ -20,11 +20,13 @@ IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_integracion_Ope
     ALTER TABLE integracion.Operacion DROP CONSTRAINT CK_integracion_Operacion_Operacion;
 GO
 
+/* Misma lista final que V032: reaplicar no puede quitar REGISTRAR_RECEPCION_OS. */
 ALTER TABLE integracion.Operacion
     ADD CONSTRAINT CK_integracion_Operacion_Operacion
         CHECK (Operacion IN (
             'INCLUIR_ITEM','EXCLUIR_ITEM','MODIFICAR_CANTIDADES',
-            'CONSOLIDAR_CMN','CREAR_CUADRO_ADQUISICION','CREAR_ORDEN_SERVICIO'));
+            'CONSOLIDAR_CMN','CREAR_CUADRO_ADQUISICION',
+            'CREAR_ORDEN_SERVICIO','REGISTRAR_RECEPCION_OS'));
 GO
 
 IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_integracion_Operacion_Origen')
@@ -38,7 +40,7 @@ ALTER TABLE integracion.Operacion
              AND Operacion IN ('INCLUIR_ITEM','EXCLUIR_ITEM','MODIFICAR_CANTIDADES','CONSOLIDAR_CMN'))
             OR
             (IdSolicitud IS NULL AND IdRequerimiento IS NOT NULL
-             AND Operacion IN ('CREAR_CUADRO_ADQUISICION','CREAR_ORDEN_SERVICIO'))
+             AND Operacion IN ('CREAR_CUADRO_ADQUISICION','CREAR_ORDEN_SERVICIO','REGISTRAR_RECEPCION_OS'))
         );
 GO
 

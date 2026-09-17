@@ -40,6 +40,7 @@ según las tablas que toca. El razonamiento completo, con las mediciones, está 
 | `sso/` | Provisión en la base del SSO (PostgreSQL). Exenta del verificador | — |
 | `pruebas/` | Consultas sueltas de humo, no forman parte de la serie | — |
 | `_snapshot/` | Fotos de un entorno en una fecha, para verificar | — |
+| `pase/` | Paquete para calidad: el ejecutor del ANIN no necesita el resto del repo | — |
 
 El orden exacto de aplicación está en `db/README.md`. Los prefijos mandan:
 `V` antes que `F`, `F` antes que `S`, y dentro de cada grupo por número.
@@ -64,6 +65,10 @@ El orden exacto de aplicación está en `db/README.md`. Los prefijos mandan:
 ```
 
 Toda corrida deja bitácora en `_bitacora\`, que no se versiona.
+
+**Pase a calidad (otro usuario ejecuta):** un `.sql` por base. Empacar con
+`pase\empacar_pase.ps1` y seguir `pase\LEEME.md`. El zip lleva `01_SIGA.sql`,
+`02_DBSIGCM.sql` y `03_SSO.sql` (nunca `-Recrear`, nunca `S900`).
 
 ## Cómo trabajar entre dos
 

@@ -35,8 +35,11 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @bdSiga  sysname = N'SIGA_1750';
-DECLARE @bdSigcm sysname = N'DBSIGCM';
+:setvar bdSiga "SIGA_1750"
+:setvar bdSigcm "DBSIGCM"
+
+DECLARE @bdSiga  sysname = N'$(bdSiga)';
+DECLARE @bdSigcm sysname = N'$(bdSigcm)';
 
 /* -------------------------------------------------------------------------- */
 /* 1. Descubrir la intercalacion de SIGA                                      */
