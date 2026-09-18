@@ -170,6 +170,87 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-17 (noche) — Modificación-Ampliación y Resolución: los flujos alternos del contrato
+
+**Qué pidió el negocio.** Los módulos 4 y 5 del Bizagi v5.0 según la Directiva
+002-2026-ANIN §7.3.4, §7.3.5 y §7.3.7, construidos a la vez porque son casos
+alternos del mismo contrato en ejecución. Análisis completo en
+[`docs/analisis-modulos-modificacion-resolucion.md`](docs/analisis-modulos-modificacion-resolucion.md).
+
+**El flujo resultante.**
+
+```
+Modificacion   MOD_PRESENTADA (pide el proveedor) | MOD_EN_SUSTENTO_AU (inicia el AU)
+               -> MOD_POR_REMITIR_AU | MOD_RECHAZADA_AU -> MOD_EN_EVALUACION_DEC
+               -> MOD_POR_FIRMA_ACTA (jefe Abast firma) -> MOD_POR_SUSCRIPCION (proveedor) -> MOD_APROBADA
+               -> MOD_DENEGADA
+Ampliacion     AMP_PRESENTADA -> AMP_DENEGADA (fuera de plazo, 7.3.5.3)
+               -> AMP_EN_OPINION_AU -> AMP_EN_DECISION_DEC -> AMP_APROBADA | AMP_DENEGADA (no si vencio, 7.3.5.4)
+Resolucion     RES_INFORMADA (AU) | RES_SOLICITADA (proveedor -> AU opina; desfavorable = RES_DENEGADA)
+               -> RES_EN_EVALUACION_DEC -> RES_DESESTIMADA | RES_POR_RESOLVER | RES_POR_FIRMA_APERCIBIMIENTO
+               -> RES_APERCIBIDO -> responde -> RES_RESPUESTA_EN_EVALUACION -> RES_SUBSANADO | RES_POR_RESOLVER
+                                 -> vence -> RES_POR_RESOLVER
+               RES_POR_RESOLVER -> RES_RESUELTO  (y el contrato -> EJE_RESUELTO)
+```
+
+**Qué se construyó.**
+
+| Pieza | Archivo |
+|---|---|
+| `ampliacion.Solicitud`, `resolucion.Procedimiento` | `db/00_ddl/V034__modificacion_resolucion.sql` |
+| Módulo MODIFICACION: 14 estados, 14 transiciones, 8 documentos, 3 plazos | `db/20_seed/S039__modificacion_ampliacion_estados.sql` |
+| Módulo RESOLUCION: 11 estados, 12 transiciones, 6 documentos, 1 plazo; `EJE_RESUELTO` + `EJE_RESOLVER` | `db/20_seed/S040__resolucion_estados.sql` |
+| 10 rutinas, bloque 52100-52199 | `db/10_api/F017__modificacion_ampliacion.sql` |
+| 9 rutinas, bloque 52200-52299 | `db/10_api/F018__resolucion.sql` |
+| Pruebas repetibles | `db/90_pruebas/S915__prueba_modificacion_ampliacion.sql`, `S916__prueba_resolucion.sql` |
+| Puente genérico de correo | `ControladorPuente.NotificarPorCorreo` |
+| Controladores | `AmpliacionController` (9 endpoints), `ResolucionController` (9) |
+| Pantallas | `modules/gestion-modificacion/`, `modules/gestion-resolucion/`, formato compartido `shared/documentos/carta-anin.pdfmake.ts` |
+| Enlaces desde el contrato | `gestion-ejecucion`: «Solicitar modificación / ampliación», «Informar causal / Solicitar resolución» |
+
+**Decisiones que no hay que volver a discutir.**
+
+- *Cuelgan del contrato vigente de Ejecución.* Proveedor, plazo y monto se leen
+  de `ejecucion.Contrato`; una solicitud del mismo tipo abierta bloquea otra; un
+  contrato cerrado no admite ninguna. La ampliación aprobada mueve
+  `FechaFinPrevista` y el `AmpliadoHasta` del plazo `EJE_EJECUCION_CONTRATO`.
+- *Mesa de partes = portal.* Como en Ejecución. `MESA_PARTES` no interviene.
+- *El acta la firma la DEC y el proveedor la suscribe.* «Suscrita por ambas
+  partes» (7.3.4.3) se cumple con la firma digital del jefe de Abastecimiento y
+  una transición propia del proveedor desde el portal, sin dispositivo.
+- *La aceptación tácita se hace cumplir.* Vencidos los 7 hábiles,
+  `paDecidirDec` rechaza DENEGADA con `CONFLICTO_PLAZO` y marca
+  `AceptacionTacita` al aprobar.
+- *El apercibimiento se calcula, no se teclea.* Rango 10 %–15 % del plazo
+  vigente, `CEILING`, 3 días si el plazo < 30; solo para `INCUMPLIMIENTO`. Las
+  demás causales resuelven directo (7.3.7.3), con comentario obligatorio.
+- *Sin rol Almacén ni rol nuevo alguno.* Mismos roles del padrón.
+- *El cierre del contrato es un movimiento interno.* `paEjecutarAccion` no
+  llama al motor para `EJE_RESOLVER`: capturar su result set exige
+  `INSERT … EXEC`, que no puede anidarse (error 8164) cuando quien llama ya lo
+  usa (scripts de prueba). Se escribe estado, versión, cierre e historial, lo
+  mismo que escribe el motor.
+- *Correo genérico.* Las rutinas `paPrepararNotificacion` devuelven el sobre
+  (`Destinatario, Copia, Asunto, Cuerpo, AdjuntoDocumento, NombreAdjunto,
+  Carpeta`) y `paMarcarNotificada` anota el resultado; el controlador solo
+  enlaza las dos con `NotificarPorCorreo`. Un correo fallido no es error: la
+  decisión ya está tomada y el aviso se reintenta.
+
+**Cómo se prueba.** `S915` sobre el contrato de `S914` (lo devuelve a su fecha
+de fin original para ser repetible) y `S916` con contrato propio de locación
+de 90 días. Ninguno toca SIGA. Por pantalla, como `prueba.abast.esp`, se aprobó
+la ampliación tardía de `S915` con carta generada, subida al file server y
+registrada; el detalle mostró la aceptación tácita y el nuevo fin del contrato.
+
+**Lo que quedó pendiente.**
+- Nulidad del contrato (7.3.8): acto de la AGA, sin flujo.
+- Registro en Pladicop del acta y de las resoluciones: se anota el número, no
+  hay interfaz.
+- Qué hace Pagos con los entregables pendientes de un contrato resuelto: se
+  anota en el contrato; la regla es de Pagos.
+- Un vencimiento del apercibimiento sin respuesta lo declara la DEC a mano
+  (`RES_VENCER_APERCIBIMIENTO`); no hay proceso programado que lo detecte.
+
 ### 2026-09-17 — Ejecución contractual: el contrato, la entrega de bienes y las incidencias
 
 **Qué pidió el negocio.** Implementar el módulo de Ejecución según la Directiva

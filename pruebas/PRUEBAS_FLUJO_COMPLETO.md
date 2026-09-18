@@ -15,6 +15,8 @@ verificación contra la base: **2026-09-08**.
 |---|---|---|
 | A · Gestión CMN | §2 | §2 bis |
 | B · Requerimiento | §4 | §4 bis |
+| B½ · Ejecución contractual (entregas de bienes) | §4 ter | — |
+| Alternos · Modificación, ampliación y resolución | §4 quater | casos 2, 3 y 6 |
 | C · Entregables y pagos | §5 | §5 bis |
 
 ---
@@ -396,6 +398,98 @@ mirarlo, o anunciar una tercera entrega como proveedor y seguirla a mano.
 
 ---
 
+## 4 quater. Tramos alternos · Modificación, ampliación y resolución
+
+Los tres nacen desde el detalle de un contrato **vigente** en «Ejecución
+contractual» (botones al pie de la ficha) o desde «Nueva solicitud» en su
+propia bandeja eligiendo el contrato. En **local**, `firma.omitir_dispositivo`
+va en `true`: los pasos de firma avanzan con el PDF sin firmar y la firma queda
+registrada igual. En el equipo desplegado va en `false` y el firmador se abre
+desde el visor.
+
+**Antes:** correr `S914` para tener el contrato `REQ-PRU-EJEC-0001` vigente.
+Los DNI son del SSO; entre paréntesis, la cuenta local equivalente de `S900`.
+
+### Caso 1 · Ampliación de plazo aprobada (7.3.5)
+
+| # | Quién | Cuenta local | Dónde | Acción | Estado |
+|---|---|---|---|---|---|
+| 1 | Proveedor | `prueba.locador` | Ejecución → contrato → «Solicitar ampliación de plazo» | Asunto, sustento, **fin del hecho generador (hace 3 días)**, **8 días** | `AMP_PRESENTADA` |
+| 2 | Abast · Especialista | `prueba.abast.esp` | Modificación y ampliación | «Remitir al Area usuaria para opinion» | `AMP_EN_OPINION_AU` |
+| 3 | AU · Especialista | `prueba.oti.esp` | Modificación y ampliación | Opinión **Procede** + informe | `AMP_EN_DECISION_DEC` |
+| 4 | Abast · Especialista | `prueba.abast.esp` | Modificación y ampliación | **Aprobar**, días que se otorgan **5**, N.° de carta, motivo → confirmar | `AMP_APROBADA` |
+| 5 | Abast · Especialista | `prueba.abast.esp` | mismo detalle | «Notificar por correo» (en local el SMTP puede fallar: la decisión queda igual y se reintenta) | notificada |
+
+Qué mirar: en el paso 4 se genera la **carta de respuesta** (PDF), se sube y
+queda en «Ver carta»; el contrato en Ejecución pasa de fin `14/10` a `19/10`
+y su plazo muestra «ampliado hasta».
+
+### Caso 2 · Ampliación fuera de plazo (7.3.5.3)
+
+Igual que el caso 1 pero con el hecho generador **hace 20 días**. La bandeja la
+marca «fuera de plazo» y la DEC tiene la acción «Denegar sin opinion del AU».
+Termina en `AMP_DENEGADA`.
+
+### Caso 3 · Aceptación tácita (7.3.5.4)
+
+`S915` la simula moviendo el vencimiento hacia atrás y deja `MOD-*-000004` en
+`AMP_EN_DECISION_DEC` con «plazo vencido: se entiende aceptada». Como DEC, elegir
+**Denegar** responde `CONFLICTO_PLAZO`; **Aprobar** la registra con la marca
+«aceptación tácita».
+
+### Caso 4 · Modificación iniciada por el área usuaria, con acta (7.3.4)
+
+| # | Quién | Cuenta local | Acción | Estado |
+|---|---|---|---|---|
+| 1 | AU · Especialista | `prueba.oti.esp` | Ejecución → contrato → «Solicitar modificación»: asunto, sustento, **qué se modifica** | `MOD_EN_SUSTENTO_AU` |
+| 2 | AU · Especialista | `prueba.oti.esp` | «Elevar al jefe» con el informe | `MOD_POR_REMITIR_AU` |
+| 3 | AU · Jefe | `prueba.oti.jefe` | «Remitir sustento a la DEC» | `MOD_EN_EVALUACION_DEC` |
+| 4 | Abast · Especialista | `prueba.abast.esp` | **Procedente** + motivo | `MOD_POR_FIRMA_ACTA` |
+| 5 | Abast · Jefe | `prueba.abast.jefe` | N.° de acta → **Generar acta** (abre el visor) → firmar 🖊 (en local se omite) → «Firmar acta de modificacion» | `MOD_POR_SUSCRIPCION` |
+| 6 | Proveedor | `prueba.locador` | «Ver acta» → «Suscribir el acta de modificacion» | `MOD_APROBADA` |
+
+Variante: si la pide el **proveedor** («Solicitar modificación» desde su
+contrato) nace en `MOD_PRESENTADA` y el especialista del AU primero elige
+**Procede / No procede**; «No procede» lleva un informe de rechazo que el jefe
+igual remite a la DEC, y la DEC deniega con carta.
+
+### Caso 5 · Resolución por incumplimiento con apercibimiento (7.3.7.2)
+
+Usar un contrato **distinto** al de los casos anteriores: la resolución lo
+cierra. `S916` siembra `REQ-PRU-RESOL-0001` (locación, 90 días) y ya lo
+recorre entero; para hacerlo a mano, correr sólo la sección 2 de `S916` o abrir
+otra orden.
+
+| # | Quién | Cuenta local | Acción | Estado |
+|---|---|---|---|---|
+| 1 | AU · Especialista | `prueba.oti.esp` | Ejecución → contrato → «Informar causal de resolución»: causal **a) Incumplimiento**, alcance, hechos | `RES_INFORMADA` |
+| 2 | AU · Jefe | `prueba.oti.jefe` | «Remitir informe a la DEC» | `RES_EN_EVALUACION_DEC` |
+| 3 | Abast · Especialista | `prueba.abast.esp` | **Requerir cumplimiento bajo apercibimiento**, plazo dentro del rango que muestra la ficha (9–14 d para 90 d) | `RES_POR_FIRMA_APERCIBIMIENTO` |
+| 4 | Abast · Jefe | `prueba.abast.jefe` | N.° de carta, medio **Notarial** → **Generar carta** → firmar → «Firmar y notificar la carta de apercibimiento» | `RES_APERCIBIDO` (corre el plazo) |
+| 5 | Proveedor | `prueba.locador` | «Responder al apercibimiento»: qué cumplió + PDF | `RES_RESPUESTA_EN_EVALUACION` |
+| 6 | AU · Especialista | `prueba.oti.esp` | **No subsanó: resolver** + informe | `RES_POR_RESOLVER` |
+| 7 | Abast · Jefe | `prueba.abast.jefe` | N.° de carta → **Generar carta** de resolución → firmar → «Firmar y notificar la carta de resolucion» | `RES_RESUELTO`; el contrato queda `EJE_RESUELTO` |
+| 8 | Abast · Especialista | `prueba.abast.esp` | Registrar la notificación notarial (cargo) o «Notificar por correo» | notificada |
+
+Qué mirar: en el paso 3 un plazo fuera del rango responde `VALIDACION_PLAZO`;
+en el 4 la ficha muestra «Cumplir hasta» y la bandeja cuenta los días; si el
+proveedor no responde, la DEC tiene «Declarar vencido el plazo» sólo **después**
+de la fecha límite. En el 6, «Subsanó» cierra en `RES_SUBSANADO` y el contrato
+sigue.
+
+### Caso 6 · Solicitud del proveedor negada (mutuo acuerdo)
+
+| # | Quién | Cuenta local | Acción | Estado |
+|---|---|---|---|---|
+| 1 | Proveedor | `prueba.locador` | «Solicitar resolución»: causal **Mutuo acuerdo**, hechos | `RES_SOLICITADA` |
+| 2 | AU · Especialista | `prueba.oti.esp` | **Desfavorable: negar la solicitud** + informe | `RES_DENEGADA` |
+| 3 | Abast · Especialista | `prueba.abast.esp` | Generar la **carta de respuesta** y notificar por correo | notificada |
+
+Con **Favorable** pasa a la DEC, que resuelve directo (`RES_POR_RESOLVER`) o
+desestima.
+
+---
+
 ## 5 ter. El correo que cambia en el SSO
 
 El SSO manda sobre `sigcm.Usuario`, y estas pruebas comprueban que eso se cumple
@@ -558,6 +652,8 @@ a QA ni a producción, son **repetibles** y **se limpian solas**.
 | `S912__pagos_entregables_presentados.sql` | Da el **paso 1 de pagos** sobre los expedientes que la base ya tiene abiertos: los deja en `PAG_ENTREGABLE_PRESENTADO`, listos para el paso 2. No siembra requerimientos ni órdenes |
 | `S913__correo_sso_desfasado.sql` | **No siembra nada: comprueba.** Que el correo vigente del SSO gana a la copia congelada en la orden de servicio. Cuatro casos, `ROLLBACK` al final, código distinto de cero si alguno falla |
 | `S914__prueba_ejecucion_bienes.sql` | `REQ-PRU-EJEC-0001` (**bien**, OTI) en `REQ_NOTIFICADO` con su contrato `EJE-*` en Sede Central · entrega 1 **conforme** hasta la Pecosa, entrega 2 **observada** con acta y retirada · una incidencia atendida · el culminar responde `estado 0`. Usa los perfiles de prueba de `S900`, así que corre en local |
+| `S915__prueba_modificacion_ampliacion.sql` | Sobre el contrato de `S914`: ampliación **aprobada** (+5 d, mueve el fin del contrato), ampliación **denegada** por extemporánea, **modificación** con acta firmada y suscrita, y denegatoria tardía rechazada por aceptación tácita. Repetible: devuelve el contrato a su fecha original |
+| `S916__prueba_resolucion.sql` | Contrato propio `REQ-PRU-RESOL-0001` (locación 90 d): mutuo acuerdo **negado** por el AU; incumplimiento **apercibido** 10 d, respondido, no subsanado y **resuelto**; el contrato queda `EJE_RESUELTO` |
 
 `S912` es para el **servidor desplegado**, donde los requerimientos ya existen y
 lo único que falta es el paso del locador. Toca sólo el esquema `pago` —y, si el

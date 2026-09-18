@@ -148,6 +148,8 @@ módulos escritos en momentos distintos no colisionen:
 51800-51899  locación: filtros, CCP, orden        (F008, F011, F014)
 51900-51999  módulo Entregables y pagos           (F012)
 52000-52099  módulo Ejecución contractual         (F016)
+52100-52199  módulo Modificación-Ampliación       (F017)
+52200-52299  módulo Resolución                    (F018)
 ```
 
 **Idempotencia.** Todo script debe poder reejecutarse sin duplicar objetos ni
@@ -183,7 +185,8 @@ resultado, incluidos los intentos denegados.
 | `requerimiento` | Requerimiento a Notificación: registro, filtros, CCP, orden |
 | `ejecucion` | Ejecución contractual: contrato, entregas de bienes, incidencias (F016) |
 | `pago` | Entregables, conformidad, liquidación, devengado y giro (F012) |
-| `ampliacion`, `resolucion` | Un esquema por módulo, declarados vacíos a propósito |
+| `ampliacion` | Modificación del contrato y ampliación de plazo (F017) |
+| `resolucion` | Resolución del contrato menor (F018) |
 
 **Las acciones del flujo no son rutinas del módulo.** Firmar, observar, derivar,
 validar y recepcionar son transiciones de estado y se ejecutan con
@@ -206,7 +209,8 @@ Solución en `Proyecto/anin_scm_back`. Tres proyectos: `anin.scm` (API),
 | `RequerimientoController` | `requerimiento` | Requerimiento a Notificación |
 | `EjecucionController` | `ejecucion` | Contrato en ejecución, entregas de bienes, incidencias |
 | `PagoController` | `pago` | Entregables, Anexo 11, checklist, devengado, giro |
-| `AmpliacionController`, `ResolucionController` | módulos | Declarados vacíos, como sus esquemas |
+| `AmpliacionController` | `ampliacion` | Modificación y ampliación de plazo; correo con `NotificarPorCorreo` |
+| `ResolucionController` | `resolucion` | Procedimiento de resolución, cartas, cierre del contrato |
 | `AccesoController` | — | Ingreso local sin SSO. Apagado en producción |
 | `TokenController` | — | Ingreso por SSO institucional |
 

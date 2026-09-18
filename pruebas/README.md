@@ -23,6 +23,8 @@ limpian solos— y el instalador los ignora a propósito:
 | `S912__pagos_entregables_presentados.sql` | Presenta los entregables de los expedientes de pago **ya abiertos** en la base, sin sembrar requerimientos. Para el servidor desplegado |
 | `S913__correo_sso_desfasado.sql` | **No siembra: comprueba.** Que el correo vigente del SSO gana a la copia congelada en la orden. Cuatro casos, `ROLLBACK` al final |
 | `S914__prueba_ejecucion_bienes.sql` | Contrato de **bienes** en ejecución con dos entregas por la ruta Almacén —una conforme con Pecosa, otra observada y retirada— y una incidencia atendida. Con los perfiles de `S900` |
+| `S915__prueba_modificacion_ampliacion.sql` | Ampliación aprobada, ampliación denegada, modificación con acta y la denegatoria tardía que la Directiva prohíbe. Sobre el contrato de `S914` |
+| `S916__prueba_resolucion.sql` | Mutuo acuerdo negado; incumplimiento con apercibimiento hasta la resolución. Contrato propio, porque lo cierra |
 | `S900`, `S901`–`S908` | Datos de acceso local y pruebas de CMN contra SIGA, de iteraciones anteriores |
 
 Y el **porqué** de cada tramo está en los documentos de análisis, que no son
@@ -32,6 +34,8 @@ guiones de prueba:
   ítem y qué actos siguen siendo de una persona dentro de SIGA.
 - `SIGA/integracion/FLUJO_PAGOS.md` — el módulo de pagos y los cinco hitos de
   integración.
+- `docs/analisis-modulos-modificacion-resolucion.md` — la Directiva 7.3.4, 7.3.5 y
+  7.3.7 frente a los seis diagramas de los módulos 4 y 5.
 - `docs/analisis-modulo-ejecucion.md` — la Directiva 7.3 y el Bizagi de
   Ejecución frente a lo que ya cubría Pagos, y por qué el módulo quedó como
   contrato + entregas de bienes + incidencias.

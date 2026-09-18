@@ -187,6 +187,33 @@ termina recepcionada con guía suscrita, o retirada con acta de incumplimiento
 `gestion-ejecucion`. `S914` recorre las dos rutas de entrega por las rutinas
 reales. Sin rol «Almacén»: lo ejerce Abastecimiento.
 
+### Modificación y ampliación de plazo — operativo con datos sembrados
+Directiva 7.3.4 y 7.3.5, Bizagi `4. MODIFICACION-AMPLIACION`. Análisis en
+`docs/analisis-modulos-modificacion-resolucion.md`. Un módulo (`MODIFICACION`,
+esquema `ampliacion`) con dos cadenas sobre un contrato **vigente** de
+Ejecución: `MOD_*` (la sustenta el AU, la DEC emite el acta, la firma el jefe de
+Abastecimiento y **la suscribe el proveedor** desde el portal) y `AMP_*` (la
+pide el proveedor; 2 + 3 + 7 días hábiles; fuera de plazo se deniega sin
+opinión; **vencidos los 7 hábiles no se puede denegar**, se entiende aceptada).
+La ampliación aprobada mueve `FechaFinPrevista` y `AmpliadoHasta` del contrato.
+`V034`, `S039`, `F017` (52100-52199). Ruta `gestion-modificacion`. `S915`.
+Acta y carta de respuesta se generan en el navegador; la decisión de la
+ampliación se **notifica por correo** con el puente genérico
+`ControladorPuente.NotificarPorCorreo`.
+
+### Resolución del contrato — operativo con datos sembrados
+Directiva 7.3.7, los cinco diagramas de `5. RESOLUCION` en una sola máquina
+con dos entradas (el AU informa la causal; el proveedor solicita mutuo acuerdo o
+hecho sobreviniente) y el desvío del **apercibimiento** solo para el
+incumplimiento reversible (7.3.7.2): la DEC elige el plazo dentro del rango que
+la rutina calcula —10 %–15 % del plazo vigente, redondeo arriba, 3 días si el
+plazo es menor a 30— y la rutina no acepta otro. Al firmar la carta de
+resolución el contrato pasa a **`EJE_RESUELTO`** en Ejecución. `V034`, `S040`,
+`F018` (52200-52299). Ruta `gestion-resolucion`. `S916`. Cartas de
+apercibimiento y resolución firmadas por el jefe de Abastecimiento; medio de
+notificación notarial, Pladicop o correo (7.3.7.2.e, 7.3.7.3). La nulidad
+(7.3.8) queda fuera: es acto de la AGA sin flujo.
+
 ### Transversal
 SSO institucional como única puerta (`acceso_local = "false"`), selector de
 perfil, panel de accesos, firma en cadena, trazabilidad, cola hacia SIGA.
@@ -318,6 +345,30 @@ Este archivo no los reemplaza: los ordena.
 
 Lo último, para que una sesión nueva sepa dónde se quedó. El detalle va en
 `CONTEXTO.md` §6.
+
+**2026-09-17 (noche) · Módulos 4 y 5: Modificación-Ampliación y Resolución**
+- Se construyen juntos porque son flujos alternos del mismo contrato de
+  Ejecución y comparten tres decisiones: cuelgan de `ejecucion.Contrato`
+  vigente, resuelven la unidad de destino con la misma rutina de F016, y
+  notifican al proveedor con un puente de correo **genérico** nuevo en
+  `ControladorPuente.NotificarPorCorreo` (antes eran 120 líneas por aviso).
+- `V034` (`ampliacion.Solicitud`, `resolucion.Procedimiento`), `S039`/`S040`
+  (14 + 12 estados, 14 + 13 transiciones, 14 documentos, 4 plazos, y
+  `EJE_RESUELTO`/`EJE_RESOLVER` en Ejecución), `F017`/`F018` (10 + 9 rutinas).
+- Reglas de la Directiva que la base hace cumplir y la pantalla sólo refleja:
+  10 hábiles del hecho generador (7.3.5.1), aceptación tácita a los 7 hábiles
+  (7.3.5.4), rango del apercibimiento (7.3.7.2.b), resolución parcial con
+  parte precisada (7.3.7.5), causal f) contra la penalidad acumulada en Pagos.
+- Al firmar la carta de resolución el contrato se cierra con un movimiento
+  interno del expediente, no con el motor: capturar el result set del motor
+  exige `INSERT … EXEC`, que no puede anidarse (8164) desde un script de prueba.
+- `S915` (ampliación aprobada +5 días, denegada por extemporánea, modificación
+  con acta firmada y suscrita, denegatoria tardía rechazada) y `S916` (mutuo
+  acuerdo negado por el AU; incumplimiento apercibido 10 días, respondido, no
+  subsanado, resuelto; contrato en `EJE_RESUELTO`). Por pantalla se aprobó una
+  ampliación como DEC con carta generada, subida y registrada.
+- El detalle del contrato en Ejecución tiene ahora «Solicitar modificación»,
+  «Solicitar ampliación» (proveedor) e «Informar causal / Solicitar resolución».
 
 **2026-09-17 · Módulo Ejecución contractual, y `jack5` integrado**
 - `dev_work_mrz` absorbe `jack5` en los tres repos (fast-forward). Traía el

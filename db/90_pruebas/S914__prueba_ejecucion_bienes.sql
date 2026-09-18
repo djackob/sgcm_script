@@ -115,6 +115,13 @@ BEGIN
      WHERE c.IdRequerimiento = @IdRequerimiento AND NOT EXISTS (SELECT 1 FROM @Exp x WHERE x.IdExpediente = c.IdExpediente);
     INSERT INTO @Exp SELECT en.IdExpediente FROM ejecucion.Entrega AS en JOIN ejecucion.Contrato AS c ON c.IdContrato = en.IdContrato
      WHERE c.IdRequerimiento = @IdRequerimiento AND NOT EXISTS (SELECT 1 FROM @Exp x WHERE x.IdExpediente = en.IdExpediente);
+    /* Los modulos 4 y 5 cuelgan del contrato (S915 usa este mismo). */
+    IF OBJECT_ID('ampliacion.Solicitud', 'U') IS NOT NULL
+        INSERT INTO @Exp SELECT s.IdExpediente FROM ampliacion.Solicitud AS s JOIN ejecucion.Contrato AS c ON c.IdContrato = s.IdContrato
+         WHERE c.IdRequerimiento = @IdRequerimiento AND NOT EXISTS (SELECT 1 FROM @Exp x WHERE x.IdExpediente = s.IdExpediente);
+    IF OBJECT_ID('resolucion.Procedimiento', 'U') IS NOT NULL
+        INSERT INTO @Exp SELECT r.IdExpediente FROM resolucion.Procedimiento AS r JOIN ejecucion.Contrato AS c ON c.IdContrato = r.IdContrato
+         WHERE c.IdRequerimiento = @IdRequerimiento AND NOT EXISTS (SELECT 1 FROM @Exp x WHERE x.IdExpediente = r.IdExpediente);
 
     DECLARE @Doc TABLE (IdDocumento uniqueidentifier PRIMARY KEY);
     INSERT INTO @Doc SELECT DISTINCT de.IdDocumento FROM sigcm.DocumentoExpediente AS de JOIN @Exp AS x ON x.IdExpediente = de.IdExpediente;
@@ -127,6 +134,10 @@ BEGIN
     DELETE pl FROM sigcm.Plazo AS pl JOIN @Exp AS x ON x.IdExpediente = pl.IdExpediente;
     DELETE h FROM sigcm.Historial AS h JOIN @Exp AS x ON x.IdExpediente = h.IdExpediente;
 
+    IF OBJECT_ID('ampliacion.Solicitud', 'U') IS NOT NULL
+        DELETE s FROM ampliacion.Solicitud AS s JOIN ejecucion.Contrato AS c ON c.IdContrato = s.IdContrato WHERE c.IdRequerimiento = @IdRequerimiento;
+    IF OBJECT_ID('resolucion.Procedimiento', 'U') IS NOT NULL
+        DELETE r FROM resolucion.Procedimiento AS r JOIN ejecucion.Contrato AS c ON c.IdContrato = r.IdContrato WHERE c.IdRequerimiento = @IdRequerimiento;
     DELETE i FROM ejecucion.Incidencia AS i JOIN ejecucion.Contrato AS c ON c.IdContrato = i.IdContrato WHERE c.IdRequerimiento = @IdRequerimiento;
     DELETE en FROM ejecucion.Entrega AS en JOIN ejecucion.Contrato AS c ON c.IdContrato = en.IdContrato WHERE c.IdRequerimiento = @IdRequerimiento;
     DELETE FROM ejecucion.Contrato WHERE IdRequerimiento = @IdRequerimiento;
