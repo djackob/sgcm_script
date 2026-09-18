@@ -81,9 +81,10 @@ INSERT INTO @inventario (tipo, cantidad, esperado) VALUES
        donde apuntan se sigue listando abajo, que es lo que de verdad importa. */
     /* Debe coincidir con el INSERT de C003 (tablas, no usp_ext_*). Subio a 27 al
        agregar SIG_ORDEN_ADQUISICION y SIG_ORDEN_INTERFASE, que son de donde el
-       modulo de pagos lee el estado real de la orden (hitos 1 y 4). */
+       modulo de pagos lee el estado real de la orden (hitos 1 y 4), y a 28 con
+       ACT_PROY_NOMBRE (jack5, 2026-09-17). */
     (N'Sinonimos tablas SIGA', (SELECT COUNT(*) FROM sys.synonyms
-                                   WHERE name NOT LIKE N'usp[_]%'), 27),
+                                   WHERE name NOT LIKE N'usp[_]%'), 28),
     (N'Sinonimos proc. SIGA', (SELECT COUNT(*) FROM sys.synonyms
                                            WHERE name LIKE N'usp[_]%'), NULL),
     (N'Secuencias',     (SELECT COUNT(*) FROM sys.sequences), NULL),

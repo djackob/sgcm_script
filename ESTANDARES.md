@@ -143,6 +143,11 @@ módulos escritos en momentos distintos no colisionen:
 51300-51399  integración con SIGA                 (W001)
 51400-51499  módulo Requerimiento a Notificación  (F005)
 51500-51599  acceso y armado de la sesión         (F006)
+51600-51699  documentos y firmas                  (F003)
+51700-51799  Anexo 4 y panel SSO                  (F007, F009)
+51800-51899  locación: filtros, CCP, orden        (F008, F011, F014)
+51900-51999  módulo Entregables y pagos           (F012)
+52000-52099  módulo Ejecución contractual         (F016)
 ```
 
 **Idempotencia.** Todo script debe poder reejecutarse sin duplicar objetos ni
@@ -175,7 +180,10 @@ resultado, incluidos los intentos denegados.
 | `cmn` | Lo propio de Gestión CMN: registrar, obtener y listar solicitudes |
 | `integracion` | Cola hacia SIGA, mapeo, conciliación |
 | `siga` | **Solo lectura.** Sinónimos y vistas sobre la base SIGA. Aquí no se escribe nunca |
-| `requerimiento`, `ejecucion`, `pago`, `ampliacion`, `resolucion` | Un esquema por módulo, declarados vacíos a propósito |
+| `requerimiento` | Requerimiento a Notificación: registro, filtros, CCP, orden |
+| `ejecucion` | Ejecución contractual: contrato, entregas de bienes, incidencias (F016) |
+| `pago` | Entregables, conformidad, liquidación, devengado y giro (F012) |
+| `ampliacion`, `resolucion` | Un esquema por módulo, declarados vacíos a propósito |
 
 **Las acciones del flujo no son rutinas del módulo.** Firmar, observar, derivar,
 validar y recepcionar son transiciones de estado y se ejecutan con
@@ -195,7 +203,10 @@ Solución en `Proyecto/anin_scm_back`. Tres proyectos: `anin.scm` (API),
 | `SigcmController` | `sigcm` | Maestros, transiciones, trazabilidad |
 | `CmnController` | `cmn` | Anexo 3 |
 | `IntegracionController` | `integracion` | Sin endpoints; la cola la mueve el worker |
-| `RequerimientoController`, `EjecucionController`, `PagoController`, `AmpliacionController`, `ResolucionController` | módulos | Declarados vacíos, como sus esquemas |
+| `RequerimientoController` | `requerimiento` | Requerimiento a Notificación |
+| `EjecucionController` | `ejecucion` | Contrato en ejecución, entregas de bienes, incidencias |
+| `PagoController` | `pago` | Entregables, Anexo 11, checklist, devengado, giro |
+| `AmpliacionController`, `ResolucionController` | módulos | Declarados vacíos, como sus esquemas |
 | `AccesoController` | — | Ingreso local sin SSO. Apagado en producción |
 | `TokenController` | — | Ingreso por SSO institucional |
 

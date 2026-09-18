@@ -1081,6 +1081,22 @@ BEGIN
             /* Hito 1 no bloquea la notificacion de la O/S. */
         END CATCH
 
+        /* 7.3.1: la ejecucion contractual empieza el dia siguiente a la
+           notificacion. El contrato en ejecucion (F016) se abre aqui, en el
+           mismo golpe y con la misma tolerancia que los expedientes de pago:
+           si falla, la orden igual queda notificada y el contrato se puede
+           abrir despues con ejecucion.paAbrirContrato. */
+        BEGIN TRY
+            IF OBJECT_ID(N'ejecucion.paAbrirDesdeOrdenServicioInterno', N'P') IS NOT NULL
+            BEGIN
+                DECLARE @pEje nvarchar(max) = @parametro;
+                SET @pEje = JSON_MODIFY(@pEje, '$.IdRequerimiento', CONVERT(nvarchar(36), @IdRequerimiento));
+                EXEC ejecucion.paAbrirDesdeOrdenServicioInterno @pEje;
+            END
+        END TRY
+        BEGIN CATCH
+        END CATCH
+
         EXEC sigcm.paEjecutarTransicion @parametro;
         RETURN;
     END TRY

@@ -171,6 +171,22 @@ SIAF; el 2 escribe la recepción conforme—. Los hitos 3 y 5 no se implementan
 porque SIGA no tiene dónde: el ANIN devenga y gira en SIAF. El cuadro completo,
 con los conteos que lo sostienen, está en `SIGA/integracion/FLUJO_PAGOS.md`.
 
+### Ejecución contractual — operativo con datos sembrados
+Directiva 7.3 y Bizagi `3. EJECUCION`. Análisis y decisiones en
+`docs/analisis-modulo-ejecucion.md`. Un **contrato** (`EJE-*`) por orden
+notificada, abierto por `paMarcarOrdenNotificada` en el mismo golpe que los
+expedientes de pago; la ejecución empieza el día siguiente a la notificación
+(7.3.1). Para **bienes**, cada entrega física es un expediente propio
+(`ENT-*`) con dos rutas —Almacén (Sede Central) o sede desconcentrada— y
+termina recepcionada con guía suscrita, o retirada con acta de incumplimiento
+(7.3.6.3). **Incidencias** del AU a la DEC (7.3.3). La rama de servicios
+(presentar entregable → Anexo 11) es el módulo de Pagos y no se repite.
+
+2 estados de contrato, 11 de entrega, 12 transiciones, 5 documentos, 3 plazos
+(`S038`); rutinas en `F016`, bloque de errores 52000-52099. Ruta
+`gestion-ejecucion`. `S914` recorre las dos rutas de entrega por las rutinas
+reales. Sin rol «Almacén»: lo ejerce Abastecimiento.
+
 ### Transversal
 SSO institucional como única puerta (`acceso_local = "false"`), selector de
 perfil, panel de accesos, firma en cadena, trazabilidad, cola hacia SIGA.
@@ -190,7 +206,8 @@ Comprobados contra la base el 2026-09-03. **Ninguno es una suposición.**
 
 | # | Qué | Dónde | Efecto |
 |---|---|---|---|
-| 1 | Numeración duplicada | dos `S006`, dos `F008` | Corren los dos porque el orden es alfabético, pero conviene renumerar. |
+| 1 | Numeración duplicada | dos `S006`, dos `F008`, dos `S035` (`cmn_observacion_sin_coordinador` y `eval_cumplimiento_tdr`, desde `jack5`) | Corren los dos porque el orden es alfabético, pero conviene renumerar. |
+| 6 | El inventario `C900` fija a mano el número de sinónimos de SIGA | `00_servidor/C900__inventario.sql` | `jack5` agregó `ACT_PROY_NOMBRE` a `C003` y dejó el esperado en 27; la instalación completa fallaba en el último paso. Corregido a 28 el 2026-09-17, pero volverá a pasar con el próximo sinónimo: el propio comentario del script dice que fijar la cuenta no aporta nada. |
 | 2 | El alta del locador en el SSO lo registra siempre como persona natural | `jsonUsuarioExternoContrataciones`, `id_tipo_persona: 1` | Un locador con razón social debería ir con `2` (`login.tm_login_tipo_persona`). Con un locador persona natural —el caso de la prueba— no se nota. |
 | 3 | Nadie le dice al locador su contraseña | `login.fn_insertar_tm_login_usuario_externo_contrataciones` | La función la deriva de `SHA512(documento + año)` y responde «se le enviará las credenciales a su correo», pero ese correo no lo manda nadie. El correo de la O/S no las incluye. |
 | 4 | El SIGCM no espera los dos pasos que en SIGA hace una persona | `usp_ext_crear_cuadro_adquisicion_desde_pedido`; `paPrepararNotificacionOrden` | El cuadro se arma sin comprobar que el pedido esté autorizado (`SIG_PEDIDOS.ESTADO='1'`), y la orden se notifica sin leer si en SIGA fue aprobada y comprometida en SIAF (`ESTADO='1'`, `ESTADO_SIAF='2'`). Diagnóstico completo y camino propuesto en `SIGA/integracion/FLUJO_CMN_A_REQUERIMIENTO.md` §6. |
@@ -301,6 +318,28 @@ Este archivo no los reemplaza: los ordena.
 
 Lo último, para que una sesión nueva sepa dónde se quedó. El detalle va en
 `CONTEXTO.md` §6.
+
+**2026-09-17 · Módulo Ejecución contractual, y `jack5` integrado**
+- `dev_work_mrz` absorbe `jack5` en los tres repos (fast-forward). Traía el
+  empaquetado para calidad (`pase/`), `F015`, `S035`–`S037` y un `S035` que
+  choca de número con el nuestro. El inventario `C900` fallaba por un sinónimo
+  nuevo no contado; corregido a 28.
+- Análisis de la Directiva 7.3 y del Bizagi `3. EJECUCION` en
+  `docs/analisis-modulo-ejecucion.md`. Conclusión que ordena el diseño: la rama
+  de servicios del diagrama **ya es el módulo de Pagos**; lo que faltaba era el
+  contrato como cosa propia, la entrega física de bienes y las incidencias.
+- `V033` (`ejecucion.Contrato`, `Entrega`, `Incidencia`), `S038` (estados,
+  transiciones, documentos, plazos), `F016` (15 rutinas). El contrato lo abre
+  `paMarcarOrdenNotificada` junto a los expedientes de pago. La unidad de
+  destino de cada entrega la resuelve el módulo y no el motor, porque la regla
+  3 del motor exige centro de costo SIGA y Abastecimiento no lo tiene cargado.
+- `S914` recorre bienes por las dos rutas (conforme con Pecosa; observada con
+  acta y retiro), una incidencia y un culminar que debe fallar. Por pantalla se
+  recorrió proveedor → DEC con los perfiles de prueba en `localhost:4300`.
+- Pantalla `gestion-ejecucion`: bandeja con plazo y avance, detalle en modal con
+  cinco pestañas; las acciones de cada entrega salen de sus `Transiciones`.
+- Local: `config.json` apunta a `localhost:5120` (jack5 lo dejó en desarrollo)
+  y el 4200 lo ocupa otro proyecto de esta máquina; el front se levanta en 4300.
 
 **2026-09-11 · El correo del SSO manda sobre la copia local**
 - Diagnóstico con fecha y hora: el correo cambió en `saa_` el 2026-09-09 a las

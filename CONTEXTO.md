@@ -170,6 +170,97 @@ Modificación de C.M.N., que es la que usamos.
 Qué se implementó en cada una y qué quedó decidido. **Se agrega una entrada por
 iteración**, arriba del todo.
 
+### 2026-09-17 — Ejecución contractual: el contrato, la entrega de bienes y las incidencias
+
+**Qué pidió el negocio.** Implementar el módulo de Ejecución según la Directiva
+002-2026-ANIN §7.3 y el Bizagi `3. EJECUCION` del flujo v5.0 (cuatro carriles:
+proveedor, mesa de partes, área usuaria, Abastecimiento). El análisis completo,
+numeral por numeral y rama por rama, está en
+[`docs/analisis-modulo-ejecucion.md`](docs/analisis-modulo-ejecucion.md).
+
+**La conclusión que ordena todo.** La rama «¿Es servicio? → Sí» del Bizagi
+(presentar entregable → evaluar → conformidad → Anexo 11 → iniciar pago) **es el
+módulo de Pagos que ya existe**: `PAG_PENDIENTE → … → PAG_CONFORMIDAD_APROBADA`,
+con el portal del locador como mesa de partes virtual (7.3.6.2.a). Construirla
+otra vez habría dejado dos máquinas para el mismo hecho. Lo que faltaba estaba a
+la izquierda de ese punto: el contrato en ejecución como cosa propia, la entrega
+física de bienes con sus dos rutas y las incidencias del 7.3.3.
+
+**El flujo resultante.**
+
+```
+Contrato   EJE_VIGENTE ──EJE_CULMINAR (AU jefe, si todo tiene conformidad)──► EJE_CULMINADO
+
+Entrega    ruta ALMACÉN (Sede Central)                   ruta SEDE (desconcentrada)
+           POR_AUTORIZAR_ALMACEN        DEC              POR_AUTORIZAR_SEDE      AU esp
+           POR_DESIGNAR_VERIFICADOR     AU jefe          EN_VERIFICACION_SEDE    AU esp
+           EN_VERIFICACION_ALMACEN      DEC              RECEPCIONADA_SEDE       DEC
+           RECEPCIONADA_ALMACEN         DEC (Pecosa)     GUIA_REGISTRADA         fin
+           ENTREGADA_AU                 fin
+                          OBSERVADA (proveedor, acta) ──► RETIRADA (fin), en las dos rutas
+```
+
+La ruta la decide `Contrato.LugarEntrega`, que fija el AU (o la DEC) antes de
+que el proveedor pueda anunciar. Cada entrega apunta al entregable del
+cronograma que cubre (`NumeroEntregable`, `IdExpedientePago`); Pagos sigue
+solo, no se le mueve nada.
+
+**Qué se construyó.**
+
+| Pieza | Archivo |
+|---|---|
+| Tablas `ejecucion.Contrato`, `Entrega`, `Incidencia` | `db/00_ddl/V033__ejecucion_contrato_entrega.sql` |
+| Módulo, 13 estados, 12 transiciones, 5 documentos, 3 plazos | `db/20_seed/S038__ejecucion_estados.sql` |
+| 15 rutinas, bloque 52000-52099 | `db/10_api/F016__ejecucion_contrato.sql` |
+| Apertura del contrato al notificar la orden | `F008` · `paMarcarOrdenNotificada`, junto al hito 1 de Pagos |
+| Prueba repetible de las dos rutas | `db/90_pruebas/S914__prueba_ejecucion_bienes.sql` |
+| Puente | `EjecucionController` (14 endpoints, una línea cada uno) |
+| Pantalla `gestion-ejecucion` | `modules/gestion-ejecucion/` + ruta en `plantilla.routes.ts` |
+
+**Decisiones que no hay que volver a discutir.**
+
+- *Dos expedientes, un esquema.* El contrato y cada entrega son `sigcm.Expediente`
+  del módulo `EJECUCION`; la entrega cuelga del contrato por `IdExpedientePadre`.
+  Es lo que Pagos hizo con un expediente por entregable, y por lo mismo: el
+  motor, la trazabilidad y los documentos se reutilizan sin tocarlos.
+- *La unidad de destino la resuelve el módulo.* El motor deduce la unidad por
+  rol y su regla 3 exige una unidad única **con centro de costo SIGA**;
+  Abastecimiento no lo tiene cargado, así que una entrega que pasa a Almacén se
+  quedaría en el área usuaria con un estado de la DEC. `F016` calcula
+  `IdUnidadDestino` —AU: unidad de origen; DEC: quien ejerce
+  `ABAST_ESPECIALISTA`; proveedor: donde tiene su rol— y lo manda siempre.
+- *El verificador designado no es `IdResponsableDestino`.* El jefe del AU
+  designa a alguien de su área, pero el estado siguiente es de Almacén, y el
+  motor exige que la persona derivada ejerza el rol del destino. Se guarda en
+  `Entrega.IdVerificador`: quién acompaña y de quién es el turno son dos cosas.
+- *Sin rol «Almacén».* La Directiva lo sitúa dentro de la DEC y el padrón del
+  SSO no lo distingue. Lo ejercen `ABAST_ESPECIALISTA` y `ABAST_COORDINADOR`.
+- *Los documentos no van como `DocumentoRequerido` del motor.* El acta y la guía
+  suscrita se suben en la misma acción que las exige, y la rutina del módulo
+  comprueba que vengan; exigirlos además en el motor obligaría a dos viajes.
+- *Incidencias sin máquina de estados.* No mueven el expediente; son un registro
+  del contrato con dos estados propios y quedan en el historial.
+- *`INSERT … EXEC` no sirve para probar una rutina que debe fallar.* El `THROW`
+  capturado con `XACT_ABORT ON` condena la transacción implícita (error 3930).
+  En `S914` el caso que debe fallar se ejecuta directo.
+
+**Cómo se prueba.** `S914` no toca SIGA. Siembra `REQ-PRU-EJEC-0001` (bien, OTI)
+en `REQ_NOTIFICADO`, abre pagos y contrato por las rutinas reales, fija Sede
+Central, y recorre: entrega 1 conforme hasta la Pecosa, entrega 2 observada con
+acta hasta el retiro, una incidencia atendida y un culminar que responde
+`estado 0` porque nada tiene conformidad. Por pantalla, con los perfiles de
+prueba, se anunció una tercera entrega como `prueba.locador` y se autorizó como
+`prueba.abast.esp`.
+
+**Lo que quedó pendiente.**
+- Que la DEC notifique al proveedor las observaciones de un entregable (rama
+  servicio del Bizagi) es un ajuste de Pagos, no de este módulo.
+- Escritura en SIGA de la recepción física: `W004` ya escribe la recepción de la
+  orden al firmar el Anexo 11; no hay un acto distinto que registrar.
+- Ampliación de plazo (7.3.5) y resolución (7.3.7): módulos 4 y 5.
+- El detalle en pantalla estrecha (vista de tarjetas) muestra la etiqueta
+  «Verificación:» vacía en una entrega sin verificar. Cosmético.
+
 ### 2026-09-11 — El correo del SSO manda sobre la copia local
 
 **El problema.** Durante la grabación del vídeo se cambió el correo de un usuario

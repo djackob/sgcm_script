@@ -350,6 +350,50 @@ Aquí **no hay secretaría**: el módulo de pagos no le da acciones ni a
 
 ---
 
+## 4 ter. Tramo B½ · Ejecución contractual (entre la orden y el pago)
+
+El contrato (`EJE-*`) **nace solo** cuando se notifica la orden (paso final del
+tramo B) y aparece en «Ejecución contractual» para el área usuaria, la DEC y el
+proveedor. Para un **servicio** no hay nada que hacer aquí salvo mirar el plazo,
+registrar incidencias y, al final, culminar: el entregable se presenta y se
+conforma en el tramo C. Para un **bien** la entrega física se recorre aquí.
+
+**Antes que nada**, el AU fija el lugar de entrega en la pestaña *Contrato*:
+sin eso el proveedor no tiene el botón «Anunciar entrega».
+
+Ruta **Almacén** (lugar = Sede Central):
+
+| # | DNI | Perfil | Dónde | Acción | Estado de la entrega |
+|---|---|---|---|---|---|
+| 1 | 46183970 | AU · Especialista | *Contrato* | Lugar de entrega = Sede Central, **Guardar** | — |
+| 2 | *(proveedor)* | `PROVEEDOR` | *Entregas* | **Anunciar entrega**: entregable, guía de remisión, bienes | `EJE_ENT_POR_AUTORIZAR_ALMACEN` |
+| 3 | 45648851 | Abast · Especialista | *Entregas* · icono 🚪 | Autorizar ingreso a Almacén | `EJE_ENT_POR_DESIGNAR_VERIFICADOR` |
+| 4 | 44687266 | AU · Jefe | *Entregas* · icono 👤✓ | Designar responsable de verificación *(alguien del área)* | `EJE_ENT_EN_VERIFICACION_ALMACEN` |
+| 5a | 45648851 | Abast · Especialista | icono ✓ | **Conforme** + guía suscrita (PDF) | `EJE_ENT_RECEPCIONADA_ALMACEN` |
+| 6a | 45648851 | Abast · Especialista | icono 📦 | Entregar al AU con **N.° Pecosa** | `EJE_ENT_ENTREGADA_AU` **(fin)** |
+| 5b | 45648851 | Abast · Especialista | icono ⚠ | **Observado** + detalle + acta de incumplimiento (PDF) | `EJE_ENT_OBSERVADA` |
+| 6b | *(proveedor)* | `PROVEEDOR` | icono 🚚 | Confirmar retiro de los bienes | `EJE_ENT_RETIRADA` **(fin)** |
+
+Ruta **Sede desconcentrada** (lugar = Sede desconcentrada + dirección): los
+pasos 3 y 4 se funden en uno del **AU · Especialista** (autorizar ingreso en
+sede), el 5 lo da el mismo especialista, y tras la recepción la DEC cierra con
+«Registrar guía suscrita en Almacén» → `EJE_ENT_GUIA_REGISTRADA`.
+
+Después de recepcionar, el proveedor **presenta el entregable en el tramo C**
+(paso 1 de pagos); la pestaña *Entregables* del contrato muestra cómo va cada
+uno sin salir de la pantalla.
+
+**Incidencias (7.3.3):** el AU las registra en su pestaña con tipo
+(incidencia / incumplimiento / riesgo) y número de SGD; la DEC las atiende con
+una respuesta. No mueven el contrato.
+
+**Culminar** (AU · Jefe, pie del modal) sólo pasa cuando **todos** los
+entregables tienen conformidad en el tramo C y no queda ninguna entrega abierta;
+si no, la rutina dice cuántos faltan.
+
+Con `S914` el recorrido de bienes ya está dado hasta el final y sólo queda
+mirarlo, o anunciar una tercera entrega como proveedor y seguirla a mano.
+
 ---
 
 ## 5 ter. El correo que cambia en el SSO
@@ -513,6 +557,7 @@ a QA ni a producción, son **repetibles** y **se limpian solas**.
 | `S911__cmn_devolucion_au.sql` | Dos CMN que ya recorrieron el flujo, parados antes de la observación: uno en la bandeja de **Administración** y otro en la de **Abastecimiento** |
 | `S912__pagos_entregables_presentados.sql` | Da el **paso 1 de pagos** sobre los expedientes que la base ya tiene abiertos: los deja en `PAG_ENTREGABLE_PRESENTADO`, listos para el paso 2. No siembra requerimientos ni órdenes |
 | `S913__correo_sso_desfasado.sql` | **No siembra nada: comprueba.** Que el correo vigente del SSO gana a la copia congelada en la orden de servicio. Cuatro casos, `ROLLBACK` al final, código distinto de cero si alguno falla |
+| `S914__prueba_ejecucion_bienes.sql` | `REQ-PRU-EJEC-0001` (**bien**, OTI) en `REQ_NOTIFICADO` con su contrato `EJE-*` en Sede Central · entrega 1 **conforme** hasta la Pecosa, entrega 2 **observada** con acta y retirada · una incidencia atendida · el culminar responde `estado 0`. Usa los perfiles de prueba de `S900`, así que corre en local |
 
 `S912` es para el **servidor desplegado**, donde los requerimientos ya existen y
 lo único que falta es el paso del locador. Toca sólo el esquema `pago` —y, si el
