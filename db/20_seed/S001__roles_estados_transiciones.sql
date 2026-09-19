@@ -314,16 +314,16 @@ SELECT s.CodigoTipoDocumento, 'CMN', s.Nombre, s.NumeracionVisible, s.AdmiteCons
    estan todas las de esta tabla. Recien con eso las siete filas de abajo
    significan algo.
 
-   Anexo 3: lo firma el jefe del area usuaria y despues lo refrendan
-   especialista y jefe de Abastecimiento. Anexo 4: lo arma el especialista y lo
-   firma unicamente el jefe de Abastecimiento. */
+   Anexo 3: lo firma el jefe del area usuaria y despues lo refrenda el jefe
+   de Abastecimiento (el especialista solo da V.B. operativo, sin certificado).
+   Anexo 4: lo arma el especialista y lo firma unicamente el jefe de Abastecimiento. */
 DECLARE @DocFirma TABLE (CodigoTipoDocumento varchar(60), CodigoRol varchar(40), OrdenFirma smallint);
 INSERT INTO @DocFirma VALUES
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'AREA_JEFE',          1),
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_ESPECIALISTA', 2),
-  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_JEFE',         3),
+  /* Anexo 3: AU jefe + Abast jefe. El especialista solo da V.B. (S041). */
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'AREA_JEFE',  1),
+  ('CMN_ANEXO_3_SOLICITUD_MODIFICACION',  'ABAST_JEFE', 2),
 
-  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE',         1);
+  ('CMN_ANEXO_4_APROBACION_MODIFICACION', 'ABAST_JEFE', 1);
 
 UPDATE d SET d.OrdenFirma = s.OrdenFirma
   FROM sigcm.TipoDocumentoFirma AS d
@@ -451,21 +451,21 @@ INSERT INTO @Tr VALUES
   /* ---------------------------------------------------------------------- */
 
   /* El especialista es quien evalua. De aqui salen los dos unicos desenlaces
-     posibles: observar o firmar. El formulario de evaluacion del frontend se
-     resuelve eligiendo una de estas dos acciones; no hay un tercer camino
-     "sin decidir" porque un expediente sin decision es un expediente parado. */
+     posibles: observar o dar visto bueno. El formulario de evaluacion del
+     frontend se resuelve eligiendo una de estas dos acciones; no hay un tercer
+     camino "sin decidir" porque un expediente sin decision es un expediente
+     parado. El V.B. no usa certificado (S041): firma digital del A3 = jefe. */
   ('CMN_ABAST_ESP_OBSERVAR', 'CMN_EN_ABAST_ESP', 'CMN_OBS_ABAST_COORD',
    'Observar el Anexo 3', 1, 0, NULL, 0, NULL, 1, NULL),
 
-  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_FIRMA_JEFE',
-   'Firmar el Anexo 3 y elevar al Jefe', 0, 1,
-   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 0, NULL, 0, 'ABAST_ESPECIALISTA'),
+  /* El especialista puede cerrar el A3 y escribir SIGA (S045). La elevacion
+     al jefe queda opcional (CMN_ABAST_ESP_ELEVAR_JEFE en S045). */
+  ('CMN_ABAST_ESP_FIRMAR_A3', 'CMN_EN_ABAST_ESP', 'CMN_A3_APROBADO',
+   'Aprobar el Anexo 3 y registrarlo en SIGA', 0, 0,
+   'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 1, 'ITEMS_ANEXO_3', 0, NULL),
 
-  /* PRIMER MOMENTO DE ESCRITURA EN SIGA.
-     La firma del jefe cierra el Anexo 3 y recien ahi los items entran a
-     SIG_CUADRO_MODIFICADO_DET. Quedan registrados con MOTIVO_SOLICITUD distinto
-     de '0': existen en SIGA pero todavia no se pueden pedir. Lo que los habilita
-     es la aprobacion del Anexo 4, mas abajo. */
+  /* Si el especialista elevo: el jefe firma y escribe SIGA. Tambien aplica a
+     expedientes legacy ya en CMN_A3_FIRMA_JEFE. */
   ('CMN_ABAST_JEFE_FIRMAR_A3', 'CMN_A3_FIRMA_JEFE', 'CMN_A3_APROBADO',
    'Firmar el Anexo 3 y registrarlo en SIGA', 0, 1,
    'CMN_ANEXO_3_SOLICITUD_MODIFICACION', 1, 'ITEMS_ANEXO_3', 0, 'ABAST_JEFE'),

@@ -277,6 +277,21 @@ BEGIN
 
         SELECT @IdPaquete = IdPaquete FROM @Nuevo;
 
+        /* Snapshot de firmantes vigentes (T5). Paquetes ya generados no se
+           recalculan si el admin cambia la config despues. */
+        IF OBJECT_ID(N'cmn.ConfigFirmanteAnexo4', N'U') IS NOT NULL
+           AND OBJECT_ID(N'cmn.PaqueteFirmante', N'U') IS NOT NULL
+        BEGIN
+            INSERT INTO cmn.PaqueteFirmante (IdPaquete, CodigoRol, OrdenFirma, EtiquetaCargo)
+            SELECT @IdPaquete, c.CodigoRol, c.OrdenFirma, c.EtiquetaCargo
+              FROM cmn.ConfigFirmanteAnexo4 AS c
+             WHERE c.Activo = 1;
+
+            IF NOT EXISTS (SELECT 1 FROM cmn.PaqueteFirmante WHERE IdPaquete = @IdPaquete)
+                INSERT INTO cmn.PaqueteFirmante (IdPaquete, CodigoRol, OrdenFirma, EtiquetaCargo)
+                VALUES (@IdPaquete, 'ABAST_JEFE', 1, N'Jefe de la Unidad de Abastecimiento');
+        END
+
         /* El orden de impresion es el del codigo del Anexo 3: es estable, es el
            que el area usuaria reconoce y no depende de como llego el JSON. */
         INSERT INTO cmn.PaqueteSolicitud
@@ -398,6 +413,16 @@ BEGIN
                     WHERE ps.IdPaquete = p.IdPaquete AND ps.Activo = 1
                     ORDER BY ps.Orden
                       FOR JSON PATH), '[]')),
+
+               Firmantes = JSON_QUERY(COALESCE((
+                   SELECT pf.CodigoRol, pf.OrdenFirma, pf.EtiquetaCargo
+                     FROM cmn.PaqueteFirmante AS pf
+                    WHERE pf.IdPaquete = p.IdPaquete
+                    ORDER BY pf.OrdenFirma
+                      FOR JSON PATH),
+                   /* Sin snapshot (paquetes previos a V035): un solo jefe. */
+                   N'[{"CodigoRol":"ABAST_JEFE","OrdenFirma":1,"EtiquetaCargo":"Jefe de la Unidad de Abastecimiento"}]')),
+
                @Mensaje AS mensaje
           FROM cmn.Paquete AS p
           JOIN sigcm.Usuario AS u  ON u.IdUsuario = p.IdUsuarioGenera

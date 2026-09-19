@@ -251,8 +251,16 @@ SELECT
     UnidadMedida      = i.UnidadMedida,
     UnidadAbreviatura = u.Abreviatura,
     PrecioUnitario    = i.PrecioUnitario,
+    /* Estructura presupuestal: el formulario de edicion la necesita para
+       repintar los combos de tarea / meta / FF / clasificador. */
+    TipoTarea         = i.TipoTarea,
+    NivelTarea        = i.NivelTarea,
+    CodigoTarea       = i.CodigoTarea,
     SecFunc           = i.SecFunc,
+    Origen            = i.Origen,
+    FuenteFinanc      = i.FuenteFinanc,
     Clasificador      = i.Clasificador,
+    TipoUso           = i.TipoUso,
     RefSecCuadro      = i.RefSecCuadro,
     RefSecItem        = i.RefSecItem,
     CantidadAno0 = SUM(CASE WHEN p.AnoOffset = 0 THEN p.Cantidad ELSE 0 END),
@@ -284,7 +292,10 @@ GROUP BY
     i.IdSolicitudItem, i.IdSolicitud, i.Orden, i.TipoMovimiento,
     i.TipoBien, i.GrupoBien, i.ClaseBien, i.FamiliaBien, i.ItemBien,
     i.DescripcionServicio, c.Descripcion, i.UnidadMedida, u.Abreviatura,
-    i.PrecioUnitario, i.SecFunc, i.Clasificador, i.RefSecCuadro, i.RefSecItem;
+    i.PrecioUnitario,
+    i.TipoTarea, i.NivelTarea, i.CodigoTarea,
+    i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador, i.TipoUso,
+    i.RefSecCuadro, i.RefSecItem;
 GO
 
 /* -------------------------------------------------------------------------- */

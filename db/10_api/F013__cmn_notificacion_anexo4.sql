@@ -114,37 +114,32 @@ BEGIN
          WHERE ps.IdSolicitud = @IdSolicitud AND ps.Activo = 1 AND pk.Anulado = 0;
 
         /* ------------------------------------------------------------------
-           A QUIEN SE AVISA
-           Al jefe del area usuaria de ORIGEN, que es quien tiene el expediente
-           en su bandeja, con copia al resto de perfiles del area que
-           intervienen en el tramite. Se resuelve por rol y unidad, nunca por un
-           id fijo: quien ocupa el puesto cambia, el puesto no.
-
-           Los correos vienen del padron del SSO, que es quien los mantiene. Un
-           usuario sin correo simplemente no entra en la lista.
+           A QUIEN SE AVISA (T7 / observacion CMN 16/09/2026)
+           Para: jefe AU + especialista AU del area de origen.
+           Copia: especialista Abast + jefe Abast.
+           Se resuelve por rol y unidad; correos del padron SSO.
            ------------------------------------------------------------------ */
-        /* Destinatario: jefe AU. Copia: puntos focales del area; si no hay
-           ninguno marcado, coordinadores y especialistas (legado). */
         DECLARE @Destinatario varchar(800), @Copia varchar(800);
-        DECLARE @HayPuntoFocal bit = 0;
+        DECLARE @IdUnidadAbast uniqueidentifier;
 
-        IF COL_LENGTH(N'sigcm.UsuarioRol', N'EsPuntoFocal') IS NOT NULL
-           AND EXISTS (
-               SELECT 1
-                 FROM sigcm.UsuarioRol AS ur
-                WHERE ur.IdUnidad = @IdUnidadOrigen
-                  AND ur.CodigoRol IN ('AREA_COORDINADOR', 'AREA_ESPECIALISTA')
-                  AND ur.Activo = 1
-                  AND ur.EsPuntoFocal = 1
-                  AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE())))
-            SET @HayPuntoFocal = 1;
+        SELECT TOP 1 @IdUnidadAbast = n.IdUnidad
+          FROM sigcm.UsuarioRol AS ur
+          JOIN sigcm.Unidad AS n ON n.IdUnidad = ur.IdUnidad AND n.Activo = 1
+         WHERE ur.CodigoRol = 'ABAST_ESPECIALISTA' AND ur.Activo = 1
+         ORDER BY CASE WHEN n.Codigo = 'UO-ABAST' THEN 0 ELSE 1 END,
+                  n.Nombre;
+
+        IF @IdUnidadAbast IS NULL
+            SELECT TOP 1 @IdUnidadAbast = IdUnidad
+              FROM sigcm.Unidad
+             WHERE Activo = 1 AND Codigo = 'UO-ABAST';
 
         SELECT @Destinatario = STRING_AGG(CONVERT(varchar(400), x.Correo), ';')
           FROM (SELECT DISTINCT us.Correo
                   FROM sigcm.UsuarioRol AS ur
                   JOIN sigcm.Usuario    AS us ON us.IdUsuario = ur.IdUsuario
                  WHERE ur.IdUnidad  = @IdUnidadOrigen
-                   AND ur.CodigoRol = 'AREA_JEFE'
+                   AND ur.CodigoRol IN ('AREA_JEFE', 'AREA_ESPECIALISTA')
                    AND ur.Activo    = 1
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()))
                    AND us.Activo = 1
@@ -154,20 +149,22 @@ BEGIN
           FROM (SELECT DISTINCT us.Correo
                   FROM sigcm.UsuarioRol AS ur
                   JOIN sigcm.Usuario    AS us ON us.IdUsuario = ur.IdUsuario
-                 WHERE ur.IdUnidad  = @IdUnidadOrigen
-                   AND ur.CodigoRol IN ('AREA_COORDINADOR', 'AREA_ESPECIALISTA')
+                 WHERE @IdUnidadAbast IS NOT NULL
+                   AND ur.IdUnidad  = @IdUnidadAbast
+                   AND ur.CodigoRol IN ('ABAST_ESPECIALISTA', 'ABAST_JEFE')
                    AND ur.Activo    = 1
                    AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE()))
                    AND us.Activo = 1
                    AND NULLIF(LTRIM(RTRIM(us.Correo)), '') IS NOT NULL
-                   AND (
-                        @HayPuntoFocal = 0
-                        OR (COL_LENGTH(N'sigcm.UsuarioRol', N'EsPuntoFocal') IS NOT NULL
-                            AND ur.EsPuntoFocal = 1)
+                   AND us.Correo NOT IN (
+                        SELECT value FROM STRING_SPLIT(ISNULL(@Destinatario, ''), ';')
+                         WHERE NULLIF(LTRIM(RTRIM(value)), '') IS NOT NULL
                    )) AS x;
 
         IF NULLIF(LTRIM(RTRIM(@Destinatario)), '') IS NULL
-            THROW 51904, 'VALIDACION_CORREO: el area usuaria no tiene un jefe con correo registrado en el padron. El expediente ya esta en su bandeja; corrija el correo y reintente el aviso.', 1;
+            THROW 51904, 'VALIDACION_CORREO: el area usuaria no tiene jefe ni especialista con correo registrado en el padron. El expediente ya esta finalizado; corrija el correo y reintente el aviso.', 1;
+
+        DECLARE @CuerpoSaludo nvarchar(200) = N'Estimados responsables de <b>' + @AreaUsuaria + N'</b>:';
 
         /* El Anexo 4 firmado, para adjuntarlo. Es el documento del expediente,
            no un archivo que la pantalla tenga a mano. */
@@ -188,7 +185,7 @@ BEGIN
                  ELSE CONCAT(N' - Anexo 4 ', @CodigoAnexo4) END);
 
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
-            N'<p>Estimado/a Jefe(a) de <b>', @AreaUsuaria, N'</b>:</p>',
+            N'<p>', @CuerpoSaludo, N'</p>',
             N'<p>Su solicitud de modificaci', @o, N'n del Cuadro Multianual de Necesidades ',
             N'<b>', @Codigo, N'</b> fue <b>aprobada</b>. El Anexo 4',
             CASE WHEN @CodigoAnexo4 IS NULL THEN N''

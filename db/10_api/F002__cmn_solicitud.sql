@@ -686,6 +686,65 @@ BEGIN
             THROW 51119, @errItem, 1;
         END
 
+        /* ---- Techo / saldo disponible (anio base) ---------------------
+           Misma fuente que el maestro TECHO del front (MontoDisponible0 =
+           MontoTecho0 - MontoUsado0). Se valida al guardar para no descubrir
+           el exceso recien al escribir en SIGA.
+
+           Se agrega por combinacion presupuestal todos los items INCLUSION
+           de esta solicitud: dos lineas de 15 000 contra un saldo de 20 000
+           tambien deben fallar.
+
+           Solo anio base (AnoOffset = 0): los techos de anios 1-3 en SIGA
+           2026 no son confiables (PPTO_ANNO_* en cero). Ver V004. */
+        DECLARE @SecFuncTecho int,
+                @OrigenTecho varchar(1),
+                @FuenteTecho varchar(2),
+                @ClasifTecho varchar(20),
+                @MontoSolicitado decimal(18,2),
+                @SaldoDisponible decimal(18,2);
+
+        SELECT TOP 1
+               @SecFuncTecho   = s.SecFunc,
+               @OrigenTecho    = s.Origen,
+               @FuenteTecho    = s.FuenteFinanc,
+               @ClasifTecho    = s.Clasificador,
+               @MontoSolicitado = s.MontoSolicitado,
+               @SaldoDisponible = ISNULL(t.Saldo, 0)
+          FROM (
+                SELECT i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador,
+                       MontoSolicitado = ROUND(SUM(CONVERT(decimal(18,6), p.Cantidad) * i.PrecioUnitario), 2)
+                  FROM #Item AS i
+                  JOIN #Periodo AS p ON p.Orden = i.Orden AND p.AnoOffset = 0
+                 WHERE i.TipoMovimiento = 'INCLUSION'
+                 GROUP BY i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador
+               ) AS s
+          OUTER APPLY (
+                SELECT Saldo = SUM(t0.MontoTecho0 - t0.MontoUsado0)
+                  FROM siga.vwTechoPresupuesto AS t0
+                 WHERE t0.AnoEje = @AnoEje AND t0.SecEjec = @SecEjec
+                   AND t0.CentroCosto = @CentroCosto AND t0.FaseCuadro = 5
+                   AND t0.SecFunc = s.SecFunc
+                   AND t0.Origen = s.Origen AND t0.FuenteFinanc = s.FuenteFinanc
+                   AND t0.Clasificador = s.Clasificador
+               ) AS t
+         WHERE s.MontoSolicitado > ISNULL(t.Saldo, 0);
+
+        IF @MontoSolicitado IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT(
+                'TECHO_SALDO: el monto solicitado (S/ ',
+                CONVERT(varchar(30), @MontoSolicitado),
+                ') excede el marco presupuestal disponible en el SIGA ',
+                '(Saldo actual: S/ ',
+                CONVERT(varchar(30), @SaldoDisponible),
+                ') para meta ', CONVERT(varchar(10), @SecFuncTecho),
+                ', fuente ', @OrigenTecho, '-', @FuenteTecho,
+                ', clasificador ', @ClasifTecho,
+                '. Ajuste el monto o la cantidad antes de continuar.');
+            THROW 51129, @errItem, 1;
+        END
+
         /* ---- Escritura ------------------------------------------------ */
         DECLARE @CodigoEstadoInicial varchar(60);
         SELECT @CodigoEstadoInicial = CodigoEstado
@@ -970,7 +1029,10 @@ BEGIN
                    Items = JSON_QUERY(COALESCE((
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
-                              r.PrecioUnitario, r.SecFunc, r.Clasificador,
+                              r.PrecioUnitario,
+                              r.TipoTarea, r.NivelTarea, r.CodigoTarea,
+                              r.SecFunc, r.Origen, r.FuenteFinanc, r.Clasificador,
+                              r.TipoUso,
                               r.RefSecCuadro, r.RefSecItem,
                               r.CantidadAno0, r.CantidadAno1, r.CantidadAno2, r.CantidadAno3,
                               r.MontoAno0, r.MontoAno1, r.MontoAno2, r.MontoAno3,
@@ -1283,6 +1345,190 @@ BEGIN
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
                    JSON_QUERY('[]') AS Solicitudes
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+        SELECT @resultado;
+    END CATCH
+END
+GO
+
+/* ========================================================================== */
+/* 4. cmn.paCambiarTipoInclusion                                             */
+/* ========================================================================== */
+
+/*
+  Abastecimiento corrige Ordinaria/Extraordinaria sin devolver a AU.
+  Solo mientras no exista Anexo 4 (paquete vivo o documento vigente).
+
+  Entrada:
+  {
+    "Actor": { ... },
+    "IdSolicitud": "...",
+    "TipoInclusion": "ORDINARIA" | "EXTRAORDINARIA",
+    "JustificacionUrgencia": "..."   obligatoria si EXTRAORDINARIA
+  }
+*/
+CREATE OR ALTER PROCEDURE cmn.paCambiarTipoInclusion
+    @parametro nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+    SET LOCK_TIMEOUT 5000;
+
+    DECLARE @resultado nvarchar(max);
+    DECLARE @TranPropia bit = 0;
+
+    BEGIN TRY
+        IF ISJSON(@parametro) <> 1
+            THROW 51150, 'JSON incorrecto.', 1;
+
+        DECLARE @IdUsuario uniqueidentifier, @Cuenta varchar(120),
+                @NombreCompleto varchar(250), @Cargo varchar(180),
+                @CodigoRol varchar(40), @IdUnidad uniqueidentifier,
+                @CentroCostoActor varchar(15), @EsTitular bit,
+                @Ip varchar(45), @Equipo varchar(50), @Programa varchar(50),
+                @CorrelacionId uniqueidentifier;
+
+        EXEC sigcm.paResolverActor @parametro,
+             @IdUsuario OUTPUT, @Cuenta OUTPUT, @NombreCompleto OUTPUT, @Cargo OUTPUT,
+             @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
+             @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
+
+        IF @CodigoRol NOT IN ('ABAST_ESPECIALISTA', 'ABAST_COORDINADOR', 'ABAST_JEFE')
+            THROW 51151, 'PERMISO_DENEGADO: solo Abastecimiento puede cambiar el tipo de solicitud.', 1;
+
+        DECLARE @IdSolicitud uniqueidentifier =
+            TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdSolicitud'));
+        DECLARE @TipoInclusion varchar(15) =
+            UPPER(NULLIF(LTRIM(RTRIM(JSON_VALUE(@parametro, '$.TipoInclusion'))), ''));
+        DECLARE @JustificacionUrgencia nvarchar(max) =
+            NULLIF(LTRIM(RTRIM(JSON_VALUE(@parametro, '$.JustificacionUrgencia'))), '');
+
+        IF @IdSolicitud IS NULL
+            THROW 51152, 'VALIDACION_PAYLOAD: falta IdSolicitud o no es un identificador valido.', 1;
+
+        IF @TipoInclusion IS NULL
+            THROW 51153, 'VALIDACION_TIPO_SOLICITUD: indique si la solicitud es ORDINARIA o EXTRAORDINARIA.', 1;
+
+        IF @TipoInclusion NOT IN ('ORDINARIA', 'EXTRAORDINARIA')
+            THROW 51154, 'VALIDACION_TIPO_SOLICITUD: TipoInclusion debe ser ORDINARIA o EXTRAORDINARIA.', 1;
+
+        IF @TipoInclusion = 'EXTRAORDINARIA' AND @JustificacionUrgencia IS NULL
+            THROW 51155, 'VALIDACION_JUSTIFICACION: una solicitud extraordinaria debe justificar por escrito la urgencia de la necesidad.', 1;
+
+        IF @TipoInclusion <> 'EXTRAORDINARIA'
+            SET @JustificacionUrgencia = NULL;
+
+        DECLARE @IdExpediente uniqueidentifier, @CodigoEstado varchar(60),
+                @TipoAnterior varchar(15), @Codigo varchar(40),
+                @JustificacionAnterior nvarchar(max);
+
+        SELECT @IdExpediente         = s.IdExpediente,
+               @CodigoEstado         = e.CodigoEstado,
+               @TipoAnterior         = s.TipoInclusion,
+               @JustificacionAnterior = s.JustificacionUrgencia,
+               @Codigo               = s.Codigo
+          FROM cmn.Solicitud AS s
+          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
+         WHERE s.IdSolicitud = @IdSolicitud
+           AND s.Activo = 1 AND e.Anulado = 0 AND e.Activo = 1;
+
+        IF @IdExpediente IS NULL
+            THROW 51156, 'NO_ENCONTRADO: la solicitud no existe, esta anulada o fue dada de baja.', 1;
+
+        /* Con Anexo 4 vivo no se tipifica: el paquete ya copio el tipo. */
+        IF EXISTS (
+            SELECT 1
+              FROM cmn.PaqueteSolicitud AS ps
+              JOIN cmn.Paquete AS pk ON pk.IdPaquete = ps.IdPaquete
+             WHERE ps.IdSolicitud = @IdSolicitud
+               AND ps.Activo = 1 AND pk.Anulado = 0
+        )
+            THROW 51157, 'CONFLICTO_ANEXO4: ya existe un Anexo 4 para esta solicitud; no se puede cambiar el tipo.', 1;
+
+        IF EXISTS (
+            SELECT 1
+              FROM cmn.fnDocumentoVigente(@IdExpediente, N'CMN_ANEXO_4_APROBACION_MODIFICACION')
+        )
+            THROW 51157, 'CONFLICTO_ANEXO4: ya existe un Anexo 4 para esta solicitud; no se puede cambiar el tipo.', 1;
+
+        IF @CodigoEstado IN ('CMN_A4_FIRMA_COORD', 'CMN_A4_FIRMA_JEFE',
+                             'CMN_A4_ENVIADO', 'CMN_FINALIZADO')
+            THROW 51157, 'CONFLICTO_ANEXO4: el expediente ya paso la generacion del Anexo 4.', 1;
+
+        IF @CodigoEstado NOT IN (
+               'CMN_EN_ABAST_JEFE', 'CMN_EN_ABAST_COORD', 'CMN_EN_ABAST_ESP',
+               'CMN_OBS_ABAST_COORD', 'CMN_OBS_ABAST_JEFE',
+               'CMN_A3_FIRMA_COORD', 'CMN_A3_FIRMA_JEFE', 'CMN_A3_APROBADO')
+            THROW 51158, 'CONFLICTO_ESTADO: el tipo solo se corrige mientras el expediente esta en Abastecimiento, antes del Anexo 4.', 1;
+
+        IF ISNULL(@TipoAnterior, '') = @TipoInclusion
+           AND ISNULL(@JustificacionAnterior, N'') = ISNULL(@JustificacionUrgencia, N'')
+        BEGIN
+            SELECT @resultado = (
+                SELECT 1 AS estado,
+                       @IdSolicitud AS IdSolicitud,
+                       @TipoInclusion AS TipoInclusion,
+                       @JustificacionUrgencia AS JustificacionUrgencia,
+                       N'Sin cambios: el tipo ya era ' + @TipoInclusion + N'.' AS mensaje
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+            SELECT @resultado;
+            RETURN;
+        END
+
+        DECLARE @Ahora datetime2(3) = SYSUTCDATETIME();
+
+        BEGIN TRANSACTION; SET @TranPropia = 1;
+
+        UPDATE cmn.Solicitud
+           SET TipoInclusion                 = @TipoInclusion,
+               JustificacionUrgencia         = @JustificacionUrgencia,
+               UsuarioModificacionAuditoria  = @Cuenta,
+               FechaModificacionAuditoria    = @Ahora,
+               EquipoModificacionAuditoria   = @Equipo,
+               ProgramaModificacionAuditoria = @Programa
+         WHERE IdSolicitud = @IdSolicitud;
+
+        INSERT INTO sigcm.Historial
+            (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
+             Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
+             UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+        VALUES
+            (@IdExpediente, @CodigoEstado, @CodigoEstado, NULL,
+             N'Cambio de tipificacion: '
+               + ISNULL(@TipoAnterior, N'(sin tipo)') + N' → ' + @TipoInclusion,
+             @IdUsuario, @CodigoRol, @IdUnidad,
+             (SELECT @Codigo AS Codigo,
+                     @TipoAnterior AS TipoAnterior,
+                     @TipoInclusion AS TipoNuevo
+              FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+             @Cuenta, @Equipo, @Programa);
+
+        COMMIT TRANSACTION; SET @TranPropia = 0;
+
+        EXEC sigcm.paRegistrarAuditoria
+             @CorrelacionId = @CorrelacionId, @CodigoModulo = 'CMN',
+             @Entidad = 'cmn.Solicitud', @IdEntidad = @IdSolicitud,
+             @Accion = 'CAMBIAR_TIPO_INCLUSION',
+             @Resultado = 'OK', @IdActor = @IdUsuario, @ActorCuenta = @Cuenta,
+             @ActorRol = @CodigoRol, @IdActorUnidad = @IdUnidad,
+             @OrigenIp = @Ip, @Equipo = @Equipo, @Programa = @Programa,
+             @DatosDespues = NULL, @Metadata = NULL;
+
+        SELECT @resultado = (
+            SELECT 1 AS estado,
+                   @IdSolicitud AS IdSolicitud,
+                   @TipoInclusion AS TipoInclusion,
+                   @JustificacionUrgencia AS JustificacionUrgencia,
+                   N'Se actualizo el tipo de solicitud a ' + @TipoInclusion + N'.' AS mensaje
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+
+        SELECT @resultado;
+    END TRY
+    BEGIN CATCH
+        IF @TranPropia = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        SELECT @resultado = (
+            SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
         SELECT @resultado;
     END CATCH

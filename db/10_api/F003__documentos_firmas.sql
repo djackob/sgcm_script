@@ -527,16 +527,35 @@ BEGIN
             THROW 51613, 'NO_ENCONTRADO: el expediente no existe o esta anulado.', 1;
 
         /* ---- El rol debe estar autorizado a firmar ESTE tipo ----------- */
-        IF NOT EXISTS (SELECT 1 FROM sigcm.TipoDocumentoFirma
-                        WHERE CodigoTipoDocumento = @CodigoTipoDocumento
-                          AND CodigoRol = @CodigoRol)
+        /* Anexo 4: si el expediente pertenece a un paquete con snapshot (T5),
+           esos firmantes mandan sobre el catalogo global. */
+        DECLARE @Firmantes TABLE (CodigoRol varchar(40) NOT NULL, OrdenFirma smallint NOT NULL);
+
+        IF @CodigoTipoDocumento = 'CMN_ANEXO_4_APROBACION_MODIFICACION'
+           AND OBJECT_ID(N'cmn.PaqueteFirmante', N'U') IS NOT NULL
+        BEGIN
+            INSERT INTO @Firmantes (CodigoRol, OrdenFirma)
+            SELECT DISTINCT pf.CodigoRol, pf.OrdenFirma
+              FROM cmn.Solicitud AS s
+              JOIN cmn.PaqueteSolicitud AS ps ON ps.IdSolicitud = s.IdSolicitud AND ps.Activo = 1
+              JOIN cmn.Paquete AS p ON p.IdPaquete = ps.IdPaquete AND p.Anulado = 0
+              JOIN cmn.PaqueteFirmante AS pf ON pf.IdPaquete = p.IdPaquete
+             WHERE s.IdExpediente = @IdExpediente;
+        END
+
+        IF NOT EXISTS (SELECT 1 FROM @Firmantes)
+            INSERT INTO @Firmantes (CodigoRol, OrdenFirma)
+            SELECT CodigoRol, OrdenFirma
+              FROM sigcm.TipoDocumentoFirma
+             WHERE CodigoTipoDocumento = @CodigoTipoDocumento;
+
+        IF NOT EXISTS (SELECT 1 FROM @Firmantes WHERE CodigoRol = @CodigoRol)
         BEGIN
             DECLARE @errRol nvarchar(500) = CONCAT(
                 'NO_AUTORIZADO: el rol ', @CodigoRol, ' no figura entre los firmantes de ',
                 @CodigoTipoDocumento, '. Firman: ',
                 ISNULL((SELECT STRING_AGG(CodigoRol, ', ') WITHIN GROUP (ORDER BY OrdenFirma)
-                          FROM sigcm.TipoDocumentoFirma
-                         WHERE CodigoTipoDocumento = @CodigoTipoDocumento), '(ninguno configurado)'), '.');
+                          FROM @Firmantes), '(ninguno configurado)'), '.');
             THROW 51614, @errRol, 1;
         END
 
@@ -569,8 +588,7 @@ BEGIN
 
         DECLARE @Ahora datetime = GETDATE();
         DECLARE @OrdenFirma smallint =
-            (SELECT OrdenFirma FROM sigcm.TipoDocumentoFirma
-              WHERE CodigoTipoDocumento = @CodigoTipoDocumento AND CodigoRol = @CodigoRol);
+            (SELECT OrdenFirma FROM @Firmantes WHERE CodigoRol = @CodigoRol);
 
         DECLARE @YaFirmo bit =
             CASE WHEN EXISTS (SELECT 1 FROM sigcm.Firma
@@ -613,9 +631,8 @@ BEGIN
         /* ---- ¿Quedan firmas pendientes? ------------------------------- */
         DECLARE @Faltantes int =
             (SELECT COUNT(*)
-               FROM sigcm.TipoDocumentoFirma AS tf
-              WHERE tf.CodigoTipoDocumento = @CodigoTipoDocumento
-                AND NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
+               FROM @Firmantes AS tf
+              WHERE NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
                                  WHERE f.IdDocumentoVersion = @IdDocumentoVersion
                                    AND f.CodigoRol = tf.CodigoRol
                                    AND f.Estado = 'FIRMADA'));
@@ -657,10 +674,9 @@ BEGIN
                    CONVERT(varchar(19), @Ahora, 126) AS FirmadoEn,
                    Pendientes = JSON_QUERY(COALESCE((
                        SELECT tf.CodigoRol, tf.OrdenFirma, Rol = r.Nombre
-                         FROM sigcm.TipoDocumentoFirma AS tf
+                         FROM @Firmantes AS tf
                          JOIN sigcm.Rol AS r ON r.CodigoRol = tf.CodigoRol
-                        WHERE tf.CodigoTipoDocumento = @CodigoTipoDocumento
-                          AND NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
+                        WHERE NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
                                            WHERE f.IdDocumentoVersion = @IdDocumentoVersion
                                              AND f.CodigoRol = tf.CodigoRol
                                              AND f.Estado = 'FIRMADA')
