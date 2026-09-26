@@ -849,6 +849,7 @@ BEGIN
             THROW 51845, 'NO_ENCONTRADO: el requerimiento no existe.', 1;
 
         SET @CorreoLocador = COALESCE(
+            NULLIF(LTRIM(RTRIM(JSON_VALUE(@parametro, '$.CorreoProveedor'))), ''),
             NULLIF(LTRIM(RTRIM(JSON_VALUE(@Datos, '$.Proveedores[0].Email'))), ''),
             NULLIF(LTRIM(RTRIM(JSON_VALUE(@Datos, '$.Proveedor.Email'))), ''));
 
@@ -938,9 +939,11 @@ BEGIN
         DECLARE @Codigo varchar(40), @Denominacion varchar(500), @Plazo int,
                 @NumeroOrden varchar(40), @CorreoLocador varchar(200), @CorreoAu varchar(200),
                 @IdExpediente uniqueidentifier, @Version int, @Estado varchar(60),
+                @Tipo varchar(20),
                 @Datos nvarchar(max), @Proveedor nvarchar(max);
 
         SELECT @Codigo = r.Codigo, @Denominacion = r.Denominacion, @Plazo = r.PlazoDias,
+               @Tipo = r.CodigoTipoContratacion,
                @IdExpediente = r.IdExpediente,
                @NumeroOrden = o.NumeroOrden,
                @CorreoLocador = o.CorreoLocador,
@@ -965,7 +968,7 @@ BEGIN
             THROW 51853, 'CONFLICTO_ESTADO: la orden solo se notifica cuando ya fue emitida.', 1;
 
         IF NULLIF(LTRIM(RTRIM(@CorreoLocador)), '') IS NULL
-            THROW 51854, 'VALIDACION_CORREO: el locador no tiene correo en el Anexo 5 / Anexo 6. Completelo antes de notificar.', 1;
+            THROW 51854, 'VALIDACION_CORREO: el proveedor adjudicado no tiene correo. Completelo antes de notificar.', 1;
 
         SET @Proveedor = COALESCE(
             JSON_QUERY(@Datos, '$.Proveedores[0]'),
@@ -975,10 +978,12 @@ BEGIN
         DECLARE @i nchar(1) = NCHAR(0x00ED);
         DECLARE @a nchar(1) = NCHAR(0x00E1);
         DECLARE @e nchar(1) = NCHAR(0x00E9);
+        DECLARE @ClaseOrden nvarchar(40) = CASE WHEN @Tipo = 'BIEN'
+            THEN N'Orden de compra' ELSE N'Orden de servicio' END;
         DECLARE @Asunto nvarchar(300) = CONCAT(
-            N'Orden de servicio ', ISNULL(@NumeroOrden, @Codigo), N' - ', @Denominacion);
+            @ClaseOrden, N' ', ISNULL(@NumeroOrden, @Codigo), N' - ', @Denominacion);
         DECLARE @Cuerpo nvarchar(max) = CONCAT(
-            N'<p>Se comunica la emisi', @o, N'n de la orden de servicio <b>', ISNULL(@NumeroOrden, @Codigo),
+            N'<p>Se comunica la emisi', @o, N'n de la ', LOWER(@ClaseOrden), N' <b>', ISNULL(@NumeroOrden, @Codigo),
             N'</b> correspondiente al requerimiento <b>', @Codigo, N'</b>.</p>',
             N'<p><b>Denominaci', @o, N'n:</b> ', @Denominacion, N'</p>',
             N'<p>A partir de esta notificaci', @o, N'n inicia el plazo de ejecuci', @o, N'n (',

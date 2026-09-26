@@ -1107,6 +1107,12 @@ BEGIN
                                      AND NOT (t.CodigoTransicion = 'REQ_REMITIR_OA' AND r.CodigoDec <> 'ABASTECIMIENTO')
                                      AND NOT (t.CodigoTransicion IN ('REQ_INICIAR_INDAGACION', 'REQ_INICIAR_FILTROS')
                                               AND r.CodigoTipoContratacion <> 'LOCACION')
+                                     AND NOT (t.CodigoTransicion IN ('REQ_INICIAR_COTIZACIONES', 'REQ_CERRAR_COTIZACIONES', 'REQ_EMITIR_OC')
+                                              AND r.CodigoTipoContratacion = 'LOCACION')
+                                     AND NOT (t.CodigoTransicion = 'REQ_EMITIR_OS'
+                                              AND r.CodigoTipoContratacion = 'BIEN')
+                                     AND NOT (t.CodigoTransicion = 'REQ_EMITIR_OC'
+                                              AND r.CodigoTipoContratacion <> 'BIEN')
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)

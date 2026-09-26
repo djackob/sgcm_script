@@ -449,6 +449,45 @@ BEGIN
                 1;
         END
 
+        IF @CodigoTransicion IN ('REQ_INICIAR_COTIZACIONES', 'REQ_CERRAR_COTIZACIONES')
+           AND EXISTS (
+               SELECT 1
+                 FROM @Lote AS l
+                 JOIN requerimiento.Requerimiento AS r
+                   ON r.IdExpediente = l.IdExpediente AND r.Activo = 1
+                WHERE r.CodigoTipoContratacion = 'LOCACION')
+        BEGIN
+            THROW 51233,
+                'CONFLICTO_TIPO: el registro de dos o mas cotizaciones aplica a bien, servicio y consultoria.',
+                1;
+        END
+
+        IF @CodigoTransicion = 'REQ_EMITIR_OC'
+           AND EXISTS (
+               SELECT 1
+                 FROM @Lote AS l
+                 JOIN requerimiento.Requerimiento AS r
+                   ON r.IdExpediente = l.IdExpediente AND r.Activo = 1
+                WHERE r.CodigoTipoContratacion <> 'BIEN')
+        BEGIN
+            THROW 51234,
+                'CONFLICTO_TIPO: la orden de compra solo aplica a bienes.',
+                1;
+        END
+
+        IF @CodigoTransicion = 'REQ_EMITIR_OS'
+           AND EXISTS (
+               SELECT 1
+                 FROM @Lote AS l
+                 JOIN requerimiento.Requerimiento AS r
+                   ON r.IdExpediente = l.IdExpediente AND r.Activo = 1
+                WHERE r.CodigoTipoContratacion = 'BIEN')
+        BEGIN
+            THROW 51235,
+                'CONFLICTO_TIPO: un bien se perfecciona con orden de compra.',
+                1;
+        END
+
         IF @RequiereComentario = 1 AND NULLIF(LTRIM(RTRIM(@Comentario)), '') IS NULL
         BEGIN
             DECLARE @errCom nvarchar(400) = CONCAT(
