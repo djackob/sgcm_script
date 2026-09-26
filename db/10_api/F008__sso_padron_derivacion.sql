@@ -651,6 +651,10 @@ GO
   terna. Quien ejerce dos roles de area usuaria (o ninguno y varios de
   Abastecimiento) tiene que elegir. Si solo hay UNA terna AREA_*, el ingreso
   SSO entra directo con esa -igual que el jefe de OTI- y no abre el selector.
+
+  CodigosPerfilSso (CSV de PE*) permite al backend respetar el perfil que el
+  usuario YA eligio en el portal SSO: con varias ternas no se vuelve a preguntar
+  en el SGCM si el token trae cod_perfil (y centro_costo cuando hace falta).
 */
 CREATE OR ALTER PROCEDURE sigcm.paListarPerfilSso
     @parametro nvarchar(max)
@@ -683,6 +687,12 @@ BEGIN
                    Unidad         = n.Nombre,
                    Sigla          = n.Sigla,
                    CentroCosto    = n.CentroCostoSiga,
+                   CodigosPerfilSso = (
+                       SELECT STRING_AGG(CAST(ps.CodigoPerfilSso AS varchar(20)), ',')
+                              WITHIN GROUP (ORDER BY ps.CodigoPerfilSso)
+                         FROM sigcm.PerfilSso AS ps
+                        WHERE ps.CodigoRol = ur.CodigoRol
+                          AND ps.Activo = 1),
                    EsAreaUsuaria  = n.EsAreaUsuaria,
                    EsTitular      = ur.EsTitular,
                    Modulos = JSON_QUERY(COALESCE((
@@ -718,6 +728,75 @@ BEGIN
         SELECT @resultado = (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
                    JSON_QUERY('[]') AS Perfiles
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+        SELECT @resultado;
+    END CATCH
+END
+GO
+
+/* ========================================================================== */
+/* 3b. sigcm.paTraducirPerfilSso                                              */
+/* ========================================================================== */
+
+/*
+  Entrada: { "CodigoPerfilSso":"PE082" }
+  Salida : { "estado":1, "CodigoRol":"ABAST_JEFE", "mensaje":"OK" }
+
+  Traduce el PE* del token SSO al CodigoRol del SIGCM. Lo usa el ingreso
+  cuando hay que respetar el perfil ya elegido en el portal y no reabrir el
+  selector del SGCM.
+*/
+CREATE OR ALTER PROCEDURE sigcm.paTraducirPerfilSso
+    @parametro nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @resultado nvarchar(max);
+
+    BEGIN TRY
+        IF @parametro IS NULL OR ISJSON(@parametro) <> 1
+            THROW 51620, 'JSON incorrecto.', 1;
+
+        DECLARE @CodigoPerfilSso varchar(20);
+        SELECT @CodigoPerfilSso = CodigoPerfilSso
+          FROM OPENJSON(@parametro) WITH (CodigoPerfilSso varchar(20));
+
+        SET @CodigoPerfilSso = NULLIF(LTRIM(RTRIM(@CodigoPerfilSso)), '');
+
+        IF @CodigoPerfilSso IS NULL
+            THROW 51621, 'VALIDACION_PAYLOAD: falta CodigoPerfilSso.', 1;
+
+        DECLARE @CodigoRol varchar(40);
+        SELECT @CodigoRol = NULLIF(LTRIM(RTRIM(ps.CodigoRol)), '')
+          FROM sigcm.PerfilSso AS ps
+         WHERE ps.CodigoPerfilSso = @CodigoPerfilSso
+           AND ps.Activo = 1;
+
+        IF @CodigoRol IS NULL
+        BEGIN
+            SELECT @resultado = (
+                SELECT 0 AS estado,
+                       CAST(NULL AS varchar(40)) AS CodigoRol,
+                       'El cod_perfil no esta mapeado en sigcm.PerfilSso.' AS mensaje
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+            SELECT @resultado;
+            RETURN;
+        END
+
+        SELECT @resultado = (
+            SELECT 1 AS estado,
+                   @CodigoRol AS CodigoRol,
+                   'OK' AS mensaje
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+        SELECT @resultado;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        SELECT @resultado = (
+            SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo,
+                   CAST(NULL AS varchar(40)) AS CodigoRol
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
         SELECT @resultado;
     END CATCH

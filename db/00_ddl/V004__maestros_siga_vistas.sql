@@ -346,7 +346,22 @@ SELECT
     PptoPrograma = CONVERT(decimal(18,2), t.PPTO_PROGRA),
     PptoModif    = CONVERT(decimal(18,2), t.PPTO_MODIF),
     MntoPrograma = CONVERT(decimal(18,2), t.MNTO_PROGRA),
-    MntoModif    = CONVERT(decimal(18,2), t.MNTO_MODIF)
+    MntoModif    = CONVERT(decimal(18,2), t.MNTO_MODIF),
+
+    /* Marco Presupuestal (PIM) de SIGA. La fila de especifica con saldo por
+       area usuaria NO es INDICADOR='4' (esa es agregacion sin CENTRO_COSTO):
+       por centro las especificas viven en otros indicadores (tip. 0) con
+       FLAG_META_APROB='1'. En la pantalla PIM, Fase compromiso es
+       PPTO_EJECU (no PPTO_DEF, que en OTI meta 15 queda en cero) y
+       Saldo Pptal = PPTO_MODIF - PPTO_EJECU - PPTO_RESER.
+       Ej. 2.3. 2 9. 1 1: 109 000 - 89 000 - 0 = 20 000. */
+    Indicador      = CONVERT(varchar(2), t.INDICADOR)       COLLATE DATABASE_DEFAULT,
+    FlagMetaAprob  = CONVERT(varchar(1), t.FLAG_META_APROB) COLLATE DATABASE_DEFAULT,
+    MarcoPptal     = CONVERT(decimal(18,2), t.PPTO_MODIF),
+    ReservaPptal   = CONVERT(decimal(18,2), t.PPTO_RESER),
+    FaseCompromiso = CONVERT(decimal(18,2), t.PPTO_EJECU),
+    SaldoPptal     = CONVERT(decimal(18,2), t.PPTO_MODIF - t.PPTO_EJECU - t.PPTO_RESER),
+    SaldoSiaf      = CONVERT(decimal(18,2), t.PPTO_SIAF  - t.PPTO_EJECU - t.PPTO_RESER)
 FROM siga.SIG_TECHO_PRESUPUESTO AS t;
 GO
 

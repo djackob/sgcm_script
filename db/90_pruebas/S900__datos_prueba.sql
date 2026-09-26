@@ -135,10 +135,12 @@ GO
 DECLARE @AreaUsuaria TABLE (Codigo varchar(30), Nombre varchar(150),
                             Sigla varchar(20), Centro varchar(15));
 INSERT INTO @AreaUsuaria VALUES
-  ('UO-OTI', 'Oficina de Tecnologias de la Informacion', 'OTI', '01.07.05.03'),
-  ('UO-UDS', 'Unidad de Desarrollo de Sistemas',         'UDS', '01.07.05.01'),
-  ('UO-US',  'Unidad de Soporte',                        'US',  '01.07.05.02'),
-  ('UO-ORH', 'Oficina de Recursos Humanos',              'ORH', '01.07.04');
+  ('UO-OTI',   'Oficina de Tecnologias de la Informacion', 'OTI',   '01.07.05.03'),
+  ('UO-UDS',   'Unidad de Desarrollo de Sistemas',         'UDS',   '01.07.05.01'),
+  ('UO-US',    'Unidad de Soporte',                        'US',    '01.07.05.02'),
+  ('UO-ORH',   'Oficina de Recursos Humanos',              'ORH',   '01.07.04'),
+  /* SESDI: techos 2.6 (bienes). OTI/UDS/US/ORH en QA solo tienen 2.3. */
+  ('UO-SESDI', 'Subdireccion de Estudios de Inversion',    'SESDI', '01.02.01');
 
 UPDATE d
    SET d.Nombre = s.Nombre, d.Sigla = s.Sigla,
@@ -218,13 +220,20 @@ INSERT INTO @Usuario VALUES
   ('prueba.orh.coord',    'Julia',  'Ampuero Vela',    'Coordinadora de la ORH'),
   ('prueba.orh.jefe',     'Fabian', 'Rojas Delgado',   'Jefe de la Oficina de Recursos Humanos'),
 
+  /* SESDI: area con techos 2.6 para probar Bien (cantidad x precio) en Anexo 3.
+     La cuenta del especialista ES el DNI (mismo criterio que 46183970): el SSO
+     resuelve por Cuenta = nro_documento del token. */
+  ('42574546',            'Nora',   'Valdivia Castro', 'Especialista de la SESDI'),
+  ('prueba.sesdi.coord',  'Ivan',   'Torres Quispe',   'Coordinador de la SESDI'),
+  ('prueba.sesdi.jefe',   'Gina',   'Paredes Flores',  'Jefa de la Subdireccion de Estudios de Inversion'),
+
   /* Cuenta real del SSO (DNI). Sin esta fila, el ingreso institucional de
      Cesar Ortiz abre menu pero la primera accion del Anexo 3 cae en
      VALIDACION_ACTOR: falta Actor.Unidad, porque el token no trae dependencia
      y no hay terna que inferir. */
   ('46183970',            'Cesar',  'Ortiz',           'Especialista de la OTI'),
 
-  ('prueba.locador',      'Denis',  'Ochoa Berrocal',  'Locador de servicios (portal externo)'),
+  ('43724871',            'Denis',  'Ochoa Berrocal',  'Locador de servicios (portal externo)'),
   ('prueba.contab',       'Elena',  'Paredes Lujan',   'Analista de Contabilidad'),
   ('prueba.tesoreria',    'Hugo',   'Salazar Ponce',   'Especialista de Tesoreria');
 
@@ -243,12 +252,12 @@ SELECT s.Cuenta, s.Nombres, s.Apellidos, s.Cargo, 'seed', 'localhost', 'S900'
    emparejarla en la segunda corrida y crearia un duplicado. */
 UPDATE sigcm.Usuario
    SET DocumentoIdentidad = Cuenta
- WHERE Cuenta = '46183970' AND NULLIF(DocumentoIdentidad, '') IS NULL;
+ WHERE Cuenta IN ('46183970', '42574546', '43724871') AND NULLIF(DocumentoIdentidad, '') IS NULL;
 
 UPDATE sigcm.Usuario
    SET DocumentoIdentidad = '43724871',
        Correo = 'djackob27@gmail.com'
- WHERE Cuenta = 'prueba.locador';
+ WHERE Cuenta = '43724871';
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -284,8 +293,11 @@ INSERT INTO @Asignacion VALUES
   ('prueba.orh.esp',      'AREA_ESPECIALISTA',  'UO-ORH',    0),
   ('prueba.orh.coord',    'AREA_COORDINADOR',   'UO-ORH',    0),
   ('prueba.orh.jefe',     'AREA_JEFE',          'UO-ORH',    1),
+  ('prueba.sesdi.coord',  'AREA_COORDINADOR',   'UO-SESDI',  0),
+  ('prueba.sesdi.jefe',   'AREA_JEFE',          'UO-SESDI',  1),
+  ('42574546',            'AREA_ESPECIALISTA',  'UO-SESDI',  0),
   ('46183970',            'AREA_ESPECIALISTA',  'UO-OTI',    0),
-  ('prueba.locador',      'PROVEEDOR',          'UO-LOCADOR', 0),
+  ('43724871',            'PROVEEDOR',          'UO-LOCADOR', 0),
   ('prueba.contab',       'CONTABILIDAD',       'UO-UC',     0),
   ('prueba.tesoreria',    'TESORERIA',          'UO-UT',     0);
 

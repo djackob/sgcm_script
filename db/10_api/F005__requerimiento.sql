@@ -805,6 +805,29 @@ BEGIN
                    e.IdExpediente, e.CodigoEstado, e.Version, e.Anulado,
                    Estado = w.Nombre,
                    Responsable = CONCAT_WS(' ', u.Nombres, u.Apellidos),
+                   /* Quien firma a la izquierda del Anexo 3. Si el requerimiento
+                      lo grabo el jefe, IdResponsable es el jefe y las dos lineas
+                      salian con el mismo nombre. Se usa el especialista de la
+                      unidad de origen; si el responsable ya lo es, ese. */
+                   EspecialistaAreaUsuaria = COALESCE(
+                       (SELECT TOP (1) CONCAT_WS(' ', ue.Nombres, ue.Apellidos)
+                          FROM sigcm.UsuarioRol AS ure
+                          JOIN sigcm.Usuario AS ue ON ue.IdUsuario = ure.IdUsuario
+                         WHERE ure.IdUsuario = r.IdResponsable
+                           AND ure.IdUnidad = COALESCE(e.IdUnidadOrigen, un.IdUnidad)
+                           AND ure.CodigoRol = 'AREA_ESPECIALISTA'
+                           AND ure.Activo = 1
+                           AND ure.VigenteHasta IS NULL
+                           AND ue.Activo = 1),
+                       (SELECT TOP (1) CONCAT_WS(' ', ue.Nombres, ue.Apellidos)
+                          FROM sigcm.UsuarioRol AS ure
+                          JOIN sigcm.Usuario AS ue ON ue.IdUsuario = ure.IdUsuario
+                         WHERE ure.IdUnidad = COALESCE(e.IdUnidadOrigen, un.IdUnidad)
+                           AND ure.CodigoRol = 'AREA_ESPECIALISTA'
+                           AND ure.Activo = 1
+                           AND ure.VigenteHasta IS NULL
+                           AND ue.Activo = 1
+                         ORDER BY ure.EsTitular DESC, ue.Apellidos, ue.Nombres)),
                    /* Jefe del area de origen: va impreso en el Anexo 3 al
                       elaborarlo el Especialista. Si se dejara en blanco, al
                       firmar el Jefe el PDF ya estaria sellado y no podria
@@ -876,8 +899,23 @@ BEGIN
               JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
               JOIN sigcm.Usuario    AS u ON u.IdUsuario    = r.IdResponsable
               JOIN sigcm.TipoContratacion AS tc ON tc.CodigoTipoContratacion = r.CodigoTipoContratacion
-              LEFT JOIN sigcm.Unidad AS un
-                     ON un.CentroCostoSiga = r.CentroCosto AND un.Activo = 1
+              /* Varias unidades activas comparten el mismo centro de costo.
+                 Un LEFT JOIN duplica la fila y FOR JSON WITHOUT_ARRAY_WRAPPER
+                 deja de ser un objeto: el puente responde 500 y el Anexo 5
+                 no se arma aunque el requerimiento ya se guardo. Se toma la
+                 unidad de origen del expediente y, si no esta, una sola del
+                 centro de costo. */
+              OUTER APPLY (
+                  SELECT TOP (1) un.IdUnidad, un.Nombre
+                    FROM sigcm.Unidad AS un
+                   WHERE un.Activo = 1
+                     AND (
+                          un.IdUnidad = e.IdUnidadOrigen
+                          OR un.CentroCostoSiga = r.CentroCosto
+                     )
+                   ORDER BY CASE WHEN un.IdUnidad = e.IdUnidadOrigen THEN 0 ELSE 1 END,
+                            un.Nombre
+              ) AS un
              WHERE r.IdRequerimiento = @IdRequerimiento
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 

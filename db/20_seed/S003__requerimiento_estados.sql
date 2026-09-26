@@ -61,8 +61,10 @@ GO
 DECLARE @Estado TABLE (CodigoEstado varchar(60), Nombre varchar(150), Orden int,
                        EsInicial bit, EsFinal bit, RolResponsable varchar(40) NULL);
 INSERT INTO @Estado VALUES
-  ('REQ_BORRADOR',        'Registrar requerimiento',                  10, 1, 0, 'AREA_ESPECIALISTA'),
-  ('REQ_DOC_PENDIENTE',   'Elaborar documento tecnico',               20, 0, 0, 'AREA_ESPECIALISTA'),
+  /* Registrar y elaborar eran el mismo especialista y el paso intermedio
+     no pedia firma ni documento. El alta nace ya en elaboracion. */
+  ('REQ_BORRADOR',        'Registrar requerimiento',                  10, 0, 0, 'AREA_ESPECIALISTA'),
+  ('REQ_DOC_PENDIENTE',   'Elaborar documento tecnico',               20, 1, 0, 'AREA_ESPECIALISTA'),
   ('REQ_PEND_VB_AU',      'Por visto bueno del Coordinador AU',       25, 0, 0, 'AREA_COORDINADOR'),
   ('REQ_PEND_FIRMA_AU',   'Por firmar el Area usuaria',               30, 0, 0, 'AREA_JEFE'),
   ('REQ_FIRMADO_AU',      'Firmado por el Area usuaria',              40, 0, 0, 'AREA_JEFE'),
@@ -161,17 +163,20 @@ DECLARE @Tr TABLE (
     GeneraObservacion    bit
 );
 INSERT INTO @Tr VALUES
+  /* REQ_ELABORAR_DOC queda inactivo: el alta ya nace en REQ_DOC_PENDIENTE. */
   ('REQ_ELABORAR_DOC', 'REQ_BORRADOR', 'REQ_DOC_PENDIENTE',
    'Continuar con el documento tecnico', 0, 0, NULL, 0, NULL, 0),
 
   /* El documento requerido depende del objeto (REQ-07) y por eso va nulo aqui:
      la rutina de negocio comprueba que exista el que corresponde al tipo de
      contratacion. Cablear uno solo obligaria a una transicion por objeto.
-     Firma especialista: llega al Coordinador AU. El Coordinador deriva al
-     Jefe. El Jefe conserva REQ_DERIVAR_JEFE por si la unidad no tiene
-     Coordinador. */
+     El especialista puede firmar y derivar, o derivar sin firmar (S047).
+     El Coordinador deriva al Jefe. La firma del Jefe no se omite. */
   ('REQ_DERIVAR_COORD', 'REQ_DOC_PENDIENTE', 'REQ_PEND_VB_AU',
-   'Firma especialista', 0, 1, NULL, 0, NULL, 0),
+   'Firmar y derivar', 0, 1, NULL, 0, NULL, 0),
+
+  ('REQ_DERIVAR_SIN_FIRMA', 'REQ_DOC_PENDIENTE', 'REQ_PEND_VB_AU',
+   'Derivar sin firmar', 0, 0, NULL, 0, NULL, 0),
 
   ('REQ_OTORGAR_VB', 'REQ_PEND_VB_AU', 'REQ_PEND_FIRMA_AU',
    'Derivar al Jefe del Area usuaria', 0, 0, NULL, 0, NULL, 0),
@@ -224,8 +229,8 @@ INSERT INTO @Tr VALUES
 
   /* REQ-27: primero se recepciona la observacion, despues se subsana. La
      subsanacion devuelve al borrador porque REQ-28 permite corregirlo todo. */
-  ('REQ_SUBSANAR', 'REQ_OBSERVADO', 'REQ_BORRADOR',
-   'Abrir subsanacion', 1, 0, NULL, 0, NULL, 0),
+  ('REQ_SUBSANAR', 'REQ_OBSERVADO', 'REQ_DOC_PENDIENTE',
+   'Modificar documentos', 1, 0, NULL, 0, NULL, 0),
 
   ('REQ_ANULAR_BORRADOR', 'REQ_BORRADOR', 'REQ_ANULADO',
    'Anular requerimiento en borrador', 1, 0, NULL, 0, NULL, 0),
@@ -255,7 +260,8 @@ SELECT s.CodigoTransicion, 'REQUERIMIENTO', s.CodigoEstadoOrigen, s.CodigoEstado
   FROM @Tr AS s
  WHERE NOT EXISTS (SELECT 1 FROM sigcm.Transicion AS d WHERE d.CodigoTransicion = s.CodigoTransicion);
 
-UPDATE sigcm.Transicion SET Activo = 0 WHERE CodigoTransicion IN ('REQ_REMITIR_DAI', 'REQ_REMITIR_OA');
+UPDATE sigcm.Transicion SET Activo = 0
+ WHERE CodigoTransicion IN ('REQ_REMITIR_DAI', 'REQ_REMITIR_OA', 'REQ_ELABORAR_DOC', 'REQ_ANULAR_BORRADOR');
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -266,6 +272,7 @@ DECLARE @TrRol TABLE (CodigoTransicion varchar(70), CodigoRol varchar(40));
 INSERT INTO @TrRol VALUES
   ('REQ_ELABORAR_DOC','AREA_ESPECIALISTA'), ('REQ_ELABORAR_DOC','AREA_JEFE'),
   ('REQ_DERIVAR_COORD','AREA_ESPECIALISTA'),
+  ('REQ_DERIVAR_SIN_FIRMA','AREA_ESPECIALISTA'),
   ('REQ_OTORGAR_VB','AREA_COORDINADOR'),
   ('REQ_DERIVAR_JEFE','AREA_JEFE'),
   ('REQ_FIRMAR_AU','AREA_JEFE'),

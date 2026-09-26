@@ -463,7 +463,11 @@ BEGIN
         END
 
         SET @Orden = NULL;
-        SELECT TOP 1 @Orden = Orden FROM #Item WHERE PrecioUnitario IS NULL OR PrecioUnitario <= 0;
+        /* Un bien (B) se valida por cantidad, no por precio: el formulario
+           no muestra el precio unitario. El monto en soles es de los servicios. */
+        SELECT TOP 1 @Orden = Orden FROM #Item
+         WHERE (PrecioUnitario IS NULL OR PrecioUnitario <= 0)
+           AND ISNULL(TipoBien, '') <> 'B';
         IF @Orden IS NOT NULL
         BEGIN
             SET @errItem = CONCAT('VALIDACION_PRECIO: el item ', @Orden, ' necesita un precio unitario mayor que cero.');
@@ -632,8 +636,9 @@ BEGIN
         END
 
         /* Una inclusion solo se guarda si la combinacion presupuestal existe
-           en el techo real de SIGA. Esto evita descubrir el error recien cuando
-           el worker intenta escribir. */
+           en el techo real de SIGA. Mismos filtros que el maestro TECHO del
+           front (FlagMetaAprob + marco > 0): FaseCuadro=5 dejaba fuera filas
+           vigentes del PIM. */
         SET @Orden = NULL;
         SELECT TOP 1 @Orden = i.Orden
           FROM #Item AS i
@@ -641,7 +646,9 @@ BEGIN
            AND NOT EXISTS (SELECT 1
                              FROM siga.vwTechoPresupuesto AS t
                             WHERE t.AnoEje = @AnoEje AND t.SecEjec = @SecEjec
-                              AND t.CentroCosto = @CentroCosto AND t.FaseCuadro = 5
+                              AND t.CentroCosto = @CentroCosto
+                              AND t.FlagMetaAprob = '1'
+                              AND t.MarcoPptal > 0
                               AND t.SecFunc = i.SecFunc
                               AND t.Origen = i.Origen AND t.FuenteFinanc = i.FuenteFinanc
                               AND t.Clasificador = i.Clasificador);
@@ -687,9 +694,10 @@ BEGIN
         END
 
         /* ---- Techo / saldo disponible (anio base) ---------------------
-           Misma fuente que el maestro TECHO del front (MontoDisponible0 =
-           MontoTecho0 - MontoUsado0). Se valida al guardar para no descubrir
-           el exceso recien al escribir en SIGA.
+           Misma fuente que el maestro TECHO del front: SaldoPptal =
+           PPTO_MODIF - PPTO_EJECU - PPTO_RESER (columna Saldo Pptal del PIM).
+           MontoTecho0 - MontoUsado0 es PPTO_APROB - MNTO_APROB y en OTI
+           (meta 15, 2.3. 2 9. 1 1) da -312 000 cuando el PIM tiene 109 000.
 
            Se agrega por combinacion presupuestal todos los items INCLUSION
            de esta solicitud: dos lineas de 15 000 contra un saldo de 20 000
@@ -720,10 +728,12 @@ BEGIN
                  GROUP BY i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador
                ) AS s
           OUTER APPLY (
-                SELECT Saldo = SUM(t0.MontoTecho0 - t0.MontoUsado0)
+                SELECT Saldo = SUM(t0.SaldoPptal)
                   FROM siga.vwTechoPresupuesto AS t0
                  WHERE t0.AnoEje = @AnoEje AND t0.SecEjec = @SecEjec
-                   AND t0.CentroCosto = @CentroCosto AND t0.FaseCuadro = 5
+                   AND t0.CentroCosto = @CentroCosto
+                   AND t0.FlagMetaAprob = '1'
+                   AND t0.MarcoPptal > 0
                    AND t0.SecFunc = s.SecFunc
                    AND t0.Origen = s.Origen AND t0.FuenteFinanc = s.FuenteFinanc
                    AND t0.Clasificador = s.Clasificador
@@ -1028,6 +1038,7 @@ BEGIN
                    NombreSustentoUrgencia    = su.NombreDocumento,
                    Items = JSON_QUERY(COALESCE((
                        SELECT r.IdSolicitudItem, r.Orden, r.TipoMovimiento, r.CodigoItem,
+                              r.TipoBien,
                               r.Descripcion, r.UnidadMedida, r.UnidadAbreviatura,
                               r.PrecioUnitario,
                               r.TipoTarea, r.NivelTarea, r.CodigoTarea,

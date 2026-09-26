@@ -583,22 +583,14 @@ BEGIN
                            WHERE c.SecEjec = @SecEjec
                              AND c.Activo = 1
                              AND (@Texto IS NULL OR c.Descripcion LIKE '%' + @Texto + '%'
-                                                 OR c.CodigoItem  LIKE @Texto + '%')
-                             /* Una inclusion no debe ofrecer un item que ya esta
-                                vigente y con cantidades en el mismo centro. */
-                             AND (@CentroCosto IS NULL OR @TipoMovimiento IS NULL
-                                  OR @TipoMovimiento <> 'INCLUSION'
-                                  OR NOT EXISTS
-                                  (SELECT 1
-                                     FROM siga.vwCuadroVigenteItem AS v
-                                    WHERE v.AnoEje = @AnoEje AND v.SecEjec = @SecEjec
-                                      AND v.CentroCosto = @CentroCosto
-                                      AND v.TipoBien = c.TipoBien AND v.GrupoBien = c.GrupoBien
-                                      AND v.ClaseBien = c.ClaseBien AND v.FamiliaBien = c.FamiliaBien
-                                      AND v.ItemBien = c.ItemBien
-                                      AND v.FlagModificado = 0 AND v.FlagSolicitud = 0
-                                      AND v.MotivoSolicitud = '0' AND v.EstadoSiga IN ('C','I')
-                                      AND v.CantAno0 + v.CantAno1 + v.CantAno2 + v.CantAno3 > 0))
+                                                 OR c.CodigoItem LIKE '%' + @Texto + '%'
+                                                 OR REPLACE(c.CodigoItem, '.', '') LIKE '%' + @Texto + '%'
+                                                 OR STUFF(REPLACE(c.CodigoItem, '.', ''), 1, 1, '') LIKE '%' + @Texto + '%')
+                             /* El catalogo muestra el item aunque ya este en el
+                                cuadro del centro. Pasajes aereos (901000010004)
+                                esta programado en muchos centros y la busqueda
+                                lo ocultaba. La exclusion o la modificacion se
+                                eligen aparte, desde el cuadro vigente. */
                            ORDER BY c.Descripcion
                              FOR JSON PATH);
         END
@@ -635,23 +627,34 @@ BEGIN
         ELSE IF @Maestro = 'TECHO'
         BEGIN
             /* Solo las filas con CentroCosto: las de centro nulo son de
-               agregacion (1 658 de 2 375 en 2026) y no corresponden a un area
-               usuaria concreta.
+               agregacion (Indicador 4 del PIM global) y no corresponden a un
+               area usuaria concreta.
 
-               MontoTecho0 y MontoUsado0 son del anio base y son los unicos
-               confiables. El techo de los anios 1 a 3 NO se ha localizado: en
-               2026 PPTO_ANNO_01..03 esta en cero en las 2 375 filas. Por eso se
-               devuelve MontoProg1..3, que es lo programado, y no un techo que no
-               existe. Ver la nota en siga.vwTechoPresupuesto. */
+               EL SALDO POR ESPECIFICA SE TOMA DEL PIM DE SIGA, no se recalcula.
+               Por area usuaria las filas con clasificador viven en INDICADOR
+               distinto de 4 (tipicamente 0) y SI traen CENTRO_COSTO. Filtrar
+               Indicador='4' AND CentroCosto a la vez devolvia cero filas y el
+               combo Clasificador del Anexo 3 quedaba vacio (OTI 01.07.05.03).
+
+               SaldoPptal = MarcoPptal - FaseCompromiso - ReservaPptal
+                         = PPTO_MODIF - PPTO_EJECU - PPTO_RESER
+               (columna "Saldo Pptal" del Marco Presupuestal de SIGA;
+               Fase compromiso es PPTO_EJECU). */
             SET @Datos = (SELECT TOP (@Limite) Secuencia, CentroCosto, FaseCuadro,
                                  TipoTarea, NivelTarea, CodigoTarea, SecFunc, SecFuncProp,
                                  Origen, FuenteFinanc, Clasificador,
-                                 MontoTecho0, MontoUsado0,
-                                 MontoDisponible0 = MontoTecho0 - MontoUsado0,
+                                 Indicador, FlagMetaAprob,
+                                 MarcoPptal, ReservaPptal, FaseCompromiso,
+                                 SaldoPptal, SaldoSiaf,
+                                 MontoTecho0      = MarcoPptal,
+                                 MontoUsado0      = FaseCompromiso + ReservaPptal,
+                                 MontoDisponible0 = SaldoPptal,
                                  MontoProg1, MontoProg2, MontoProg3
                             FROM siga.vwTechoPresupuesto
                            WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
                              AND CentroCosto IS NOT NULL
+                             AND FlagMetaAprob = '1'
+                             AND MarcoPptal > 0
                              AND (@CentroCosto IS NULL OR CentroCosto = @CentroCosto)
                              AND (@SecFunc IS NULL OR SecFunc = @SecFunc)
                              AND (@Origen IS NULL OR Origen = @Origen)
@@ -687,7 +690,14 @@ BEGIN
                (listarCentroCostoTarea) y el resumen concatenado de items
                (listarItemsPedidoResumen). Solo lineas del tipo de bien del
                objeto: locacion no mezcla compras. TipoActProy / NombreActProy
-               salen de ACT_PROY_NOMBRE (CUI tipo 2 o idea tipo 0) para el TDR. */
+               salen de ACT_PROY_NOMBRE (CUI tipo 2 o idea tipo 0) para el TDR.
+
+               El combo PEDIDO no lista un pedido cuyo cuadro ya tiene orden
+               (NRO_ORDEN). usp_ext_crear_cuadro_adquisicion_desde_pedido
+               rechaza ese caso: no se puede generar otro cuadro ni otra orden.
+               Sigue en la lista el pedido sin cuadro y el que tiene cuadro
+               con NRO_ORDEN nulo. PEDIDO_DETALLE no aplica este corte: un
+               requerimiento ya grabado debe poder releer su pedido. */
             DECLARE @IdUsuarioPed      uniqueidentifier,
                     @CuentaPed         varchar(120),
                     @NombrePed         varchar(250),
@@ -734,15 +744,23 @@ BEGIN
             SET @TipoPedidoPed = CASE WHEN @TipoBien = 'S' THEN '2' ELSE '1' END;
 
             IF @Maestro = 'PEDIDO'
-                SET @Datos = (SELECT TOP (@Limite) NumeroPedido, MotivoPedido, AnoEje,
-                                     TipoBien, TipoPedido, ActProy, FuenteFinanc, CodigoTarea,
-                                     SecFunc, FechaPedido, Origen, CentroCosto, Programa
-                                FROM siga.vwPedido
-                               WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec
-                                 AND CentroCosto = @CentroCosto
-                                 AND TipoPedido = @TipoPedidoPed
-                                 AND TipoBien = @TipoBien
-                               ORDER BY NumeroPedido
+                SET @Datos = (SELECT TOP (@Limite) p.NumeroPedido, p.MotivoPedido, p.AnoEje,
+                                     p.TipoBien, p.TipoPedido, p.ActProy, p.FuenteFinanc, p.CodigoTarea,
+                                     p.SecFunc, p.FechaPedido, p.Origen, p.CentroCosto, p.Programa
+                                FROM siga.vwPedido AS p
+                               WHERE p.AnoEje = @AnoEje AND p.SecEjec = @SecEjec
+                                 AND p.CentroCosto = @CentroCosto
+                                 AND p.TipoPedido = @TipoPedidoPed
+                                 AND p.TipoBien = @TipoBien
+                                 AND NOT EXISTS (
+                                     SELECT 1
+                                       FROM siga.SIG_CUADRO_ADQUISICION AS c
+                                      WHERE c.ANO_EJE = p.AnoEje
+                                        AND c.SEC_EJEC = p.SecEjec
+                                        AND c.TIPO_BIEN = p.TipoBien
+                                        AND c.NRO_REQUER = TRY_CONVERT(numeric(10,0), p.NumeroPedido)
+                                        AND c.NRO_ORDEN IS NOT NULL)
+                               ORDER BY p.NumeroPedido
                                  FOR JSON PATH);
             ELSE
             BEGIN

@@ -529,7 +529,11 @@ BEGIN
         /* ---- El rol debe estar autorizado a firmar ESTE tipo ----------- */
         /* Anexo 4: si el expediente pertenece a un paquete con snapshot (T5),
            esos firmantes mandan sobre el catalogo global. */
-        DECLARE @Firmantes TABLE (CodigoRol varchar(40) NOT NULL, OrdenFirma smallint NOT NULL);
+        DECLARE @Firmantes TABLE (
+            CodigoRol varchar(40) NOT NULL,
+            OrdenFirma smallint NOT NULL,
+            FirmaObligatoria bit NOT NULL DEFAULT (1)
+        );
 
         IF @CodigoTipoDocumento = 'CMN_ANEXO_4_APROBACION_MODIFICACION'
            AND OBJECT_ID(N'cmn.PaqueteFirmante', N'U') IS NOT NULL
@@ -544,8 +548,8 @@ BEGIN
         END
 
         IF NOT EXISTS (SELECT 1 FROM @Firmantes)
-            INSERT INTO @Firmantes (CodigoRol, OrdenFirma)
-            SELECT CodigoRol, OrdenFirma
+            INSERT INTO @Firmantes (CodigoRol, OrdenFirma, FirmaObligatoria)
+            SELECT CodigoRol, OrdenFirma, ISNULL(FirmaObligatoria, 1)
               FROM sigcm.TipoDocumentoFirma
              WHERE CodigoTipoDocumento = @CodigoTipoDocumento;
 
@@ -629,10 +633,13 @@ BEGIN
         END
 
         /* ---- ¿Quedan firmas pendientes? ------------------------------- */
+        /* FirmaObligatoria = 0 (especialista AU) puede constar en el PDF,
+           pero no impide cerrar el documento cuando firma el jefe. */
         DECLARE @Faltantes int =
             (SELECT COUNT(*)
                FROM @Firmantes AS tf
-              WHERE NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
+              WHERE tf.FirmaObligatoria = 1
+                AND NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
                                  WHERE f.IdDocumentoVersion = @IdDocumentoVersion
                                    AND f.CodigoRol = tf.CodigoRol
                                    AND f.Estado = 'FIRMADA'));
@@ -676,7 +683,8 @@ BEGIN
                        SELECT tf.CodigoRol, tf.OrdenFirma, Rol = r.Nombre
                          FROM @Firmantes AS tf
                          JOIN sigcm.Rol AS r ON r.CodigoRol = tf.CodigoRol
-                        WHERE NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
+                        WHERE tf.FirmaObligatoria = 1
+                          AND NOT EXISTS (SELECT 1 FROM sigcm.Firma AS f
                                            WHERE f.IdDocumentoVersion = @IdDocumentoVersion
                                              AND f.CodigoRol = tf.CodigoRol
                                              AND f.Estado = 'FIRMADA')

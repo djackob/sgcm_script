@@ -46,7 +46,7 @@ DECLARE @FirmaObs TABLE (
 );
 INSERT INTO @FirmaObs VALUES
   ('REQ_DERIVAR_COORD_OBS', 'REQ_OBSERVADO', 'REQ_PEND_VB_AU',
-   'Firma especialista', 0, 1, NULL, 0, NULL, 0);
+   'Firmar y derivar', 0, 1, NULL, 0, NULL, 0);
 
 UPDATE d
    SET d.CodigoEstadoOrigen   = s.CodigoEstadoOrigen,

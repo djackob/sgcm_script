@@ -269,6 +269,9 @@ CREATE TABLE sigcm.TipoDocumentoFirma (
     CodigoRol           varchar(40) NOT NULL
                         CONSTRAINT FK_sigcm_TipoDocFirma_Rol REFERENCES sigcm.Rol(CodigoRol),
     OrdenFirma          smallint NOT NULL CONSTRAINT DF_sigcm_TipoDocFirma_Orden DEFAULT (1),
+    /* 0 = puede firmar, pero el documento se cierra sin esa firma.
+       La del especialista AU en Requerimiento es opcional; la del jefe no. */
+    FirmaObligatoria    bit NOT NULL CONSTRAINT DF_sigcm_TipoDocFirma_Obligatoria DEFAULT (1),
     CONSTRAINT PK_sigcm_TipoDocumentoFirma PRIMARY KEY (CodigoTipoDocumento, CodigoRol)
 );
 GO

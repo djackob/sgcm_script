@@ -1,4 +1,4 @@
-﻿:setvar bdSiga "SIGA_1750"
+:setvar bdSiga "SIGA_1750"
 USE [$(bdSiga)];
 GO
 

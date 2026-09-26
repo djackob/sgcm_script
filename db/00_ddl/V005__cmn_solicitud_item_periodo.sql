@@ -164,7 +164,7 @@ CREATE TABLE cmn.SolicitudItem (
     CONSTRAINT UQ_cmn_SolItem_Orden UNIQUE (IdSolicitud, Orden),
     CONSTRAINT CK_cmn_SolItem_Movimiento
         CHECK (TipoMovimiento IN ('INCLUSION','EXCLUSION','MODIFICACION')),
-    CONSTRAINT CK_cmn_SolItem_Precio   CHECK (PrecioUnitario > 0),
+    CONSTRAINT CK_cmn_SolItem_Precio   CHECK (PrecioUnitario >= 0),
     CONSTRAINT CK_cmn_SolItem_TipoBien CHECK (TipoBien IN ('B','S','O')),
     /* Excluir o modificar exige senialar cual item del cuadro vigente se toca */
     CONSTRAINT CK_cmn_SolItem_Referencia CHECK (
