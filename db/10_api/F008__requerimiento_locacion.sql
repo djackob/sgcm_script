@@ -234,8 +234,8 @@ BEGIN
                   ResultadoPid               varchar(20),
                   Origen                     varchar(20),
                   Observacion                nvarchar(500),
-                  GeneradoDocumentoEvidencia nvarchar(1000),
-                  NombreDocumentoEvidencia   nvarchar(1000)
+                  GeneradoDocumentoEvidencia nvarchar(max),
+                  NombreDocumentoEvidencia   nvarchar(max)
               )
         ) AS s
         ON d.IdRequerimiento = @IdRequerimiento AND d.CodigoFiltro = s.CodigoFiltro
@@ -424,11 +424,11 @@ BEGIN
              @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
              @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
 
-        /* Solo el jefe (o secretaria con su permiso) cierra filtros: S005 fija
-           REQ_CONFIRMAR_FILTROS con origen REQ_FILTROS_JEFE. El especialista
-           completa en REQ_FILTROS y deriva al coordinador; el coordinador al jefe. */
-        IF @CodigoRol NOT IN ('ABAST_JEFE', 'ABAST_SECRETARIA')
-            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP la confirma el jefe de Abastecimiento (DEC).', 1;
+        /* La idoneidad y la solicitud de CCP las cierra el especialista de
+           Abastecimiento. Jefe y secretaria siguen pudiendo cerrar un
+           expediente que ya estaba en su bandeja. */
+        IF @CodigoRol NOT IN ('ABAST_ESPECIALISTA', 'ABAST_JEFE', 'ABAST_SECRETARIA')
+            THROW 51819, 'NO_AUTORIZADO: la solicitud de CCP la confirma el especialista de Abastecimiento.', 1;
 
         DECLARE @IdRequerimiento uniqueidentifier =
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdRequerimiento'));
@@ -451,8 +451,8 @@ BEGIN
           FROM sigcm.Expediente AS e
          WHERE e.IdExpediente = @IdExpediente;
 
-        IF @EstadoFiltro <> 'REQ_FILTROS_JEFE'
-            THROW 51828, 'CONFLICTO_ESTADO: confirme idoneidad y solicite CCP cuando el expediente este en revision del jefe (REQ_FILTROS_JEFE). Desde REQ_FILTROS el especialista debe enviar los filtros al coordinador.', 1;
+        IF @EstadoFiltro NOT IN ('REQ_FILTROS', 'REQ_FILTROS_COORD', 'REQ_FILTROS_JEFE')
+            THROW 51828, 'CONFLICTO_ESTADO: confirme idoneidad y solicite CCP cuando el expediente este en filtros de idoneidad.', 1;
 
         /* Misma siembra que paListarFiltroIdoneidad: si el especialista confirma
            desde la bandeja sin abrir el detalle, los registros deben existir. */

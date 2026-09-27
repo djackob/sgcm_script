@@ -486,6 +486,12 @@ BEGIN
           FROM @P AS p ORDER BY p.Codigo;
 
         /* ---- 2.8 Solicitud de modificacion ----------------------------- */
+        /* Un registro masivo reutiliza la solicitud abierta del mismo centro.
+           @SecSolicitud llega informado desde W001; si no existe o ya no esta
+           enviada, se abre una sola cabecera nueva. Los items siguientes
+           solo agregan detalle. */
+
+        DECLARE @Reutiliza bit, @DetBase int;
 
         SET @RecursoLock = 'SIGA_SOL_MOD_' + CONVERT(varchar(6),@SecEjec) + '_'
                          + CONVERT(varchar(4),@AnoEje) + '_' + @CentroCosto;
@@ -497,16 +503,51 @@ BEGIN
         IF @ResultadoLock < 0
             RAISERROR('No se pudo reservar la numeracion de la solicitud SIGA.', 16, 1);
 
-        SELECT @SecSolicitud = COALESCE(MAX(SEC_SOL_MOD),0) + 1
-          FROM dbo.SIG_SOLICITUD_MODIFICACION WITH (UPDLOCK, HOLDLOCK)
-         WHERE SEC_EJEC=@SecEjec AND ANNO_EJEC=@AnoEje AND CENTRO_COSTO=@CentroCosto;
+        SET @Reutiliza = 0;
+        IF @SecSolicitud IS NOT NULL
+           AND EXISTS (
+                SELECT 1
+                  FROM dbo.SIG_SOLICITUD_MODIFICACION
+                 WHERE SEC_EJEC = @SecEjec
+                   AND ANNO_EJEC = @AnoEje
+                   AND CENTRO_COSTO = @CentroCosto
+                   AND SEC_SOL_MOD = @SecSolicitud
+                   AND ESTADO = '2')
+            SET @Reutiliza = 1;
 
-        INSERT INTO dbo.SIG_SOLICITUD_MODIFICACION
-            (SEC_EJEC, ANNO_EJEC, CENTRO_COSTO, SEC_SOL_MOD, ESTADO, FECHA, GLOSA,
-             CUSER_ID, FECHA_REG, EQUIPO_REG, CUSER_MOD, FECHA_MOD, EQUIPO_MOD, GLOSA_MODIF)
-        VALUES
-            (@SecEjec, @AnoEje, @CentroCosto, @SecSolicitud, '2', @Ahora, @Glosa,
-             @Usuario, @Ahora, @Equipo, NULL, NULL, NULL, NULL);
+        IF @Reutiliza = 0
+        BEGIN
+            SELECT @SecSolicitud = COALESCE(MAX(SEC_SOL_MOD),0) + 1
+              FROM dbo.SIG_SOLICITUD_MODIFICACION WITH (UPDLOCK, HOLDLOCK)
+             WHERE SEC_EJEC=@SecEjec AND ANNO_EJEC=@AnoEje AND CENTRO_COSTO=@CentroCosto;
+
+            INSERT INTO dbo.SIG_SOLICITUD_MODIFICACION
+                (SEC_EJEC, ANNO_EJEC, CENTRO_COSTO, SEC_SOL_MOD, ESTADO, FECHA, GLOSA,
+                 CUSER_ID, FECHA_REG, EQUIPO_REG, CUSER_MOD, FECHA_MOD, EQUIPO_MOD, GLOSA_MODIF)
+            VALUES
+                (@SecEjec, @AnoEje, @CentroCosto, @SecSolicitud, '2', @Ahora, @Glosa,
+                 @Usuario, @Ahora, @Equipo, NULL, NULL, NULL, NULL);
+
+            /* SEC_DOC_EST se numera por ejecutora y estado: la PK es
+               (SEC_EJEC, SEC_DOC_EST, ESTADO). Una sola vez por solicitud. */
+            SELECT @SecDocEstado = COALESCE(MAX(SEC_DOC_EST),0) + 1
+              FROM dbo.SIG_DOCUMENTO_ESTADO WITH (UPDLOCK, HOLDLOCK)
+             WHERE SEC_EJEC=@SecEjec AND ESTADO='2';
+
+            INSERT INTO dbo.SIG_DOCUMENTO_ESTADO
+                (SEC_EJEC, SEC_DOC_EST, ESTADO, FLAG_ULT_MOV, FECHA, OBSERVACION,
+                 CUSER_ID, FECHA_REG, EQUIPO_REG, SOL_ANNO_EJEC, SOL_CC, SEC_SOL_MOD,
+                 SOL_GRU_ANNO_EJEC, SOL_GRU_SEC)
+            VALUES
+                (@SecEjec, @SecDocEstado, '2', '1', @Ahora, NULL,
+                 @Usuario, @Ahora, @Equipo, @AnoEje, @CentroCosto, @SecSolicitud,
+                 NULL, NULL);
+        END
+
+        SELECT @DetBase = COALESCE(MAX(SEC_SOL_MOD_DET), 0)
+          FROM dbo.SIG_SOLICITUD_MODIFICACION_DET WITH (UPDLOCK, HOLDLOCK)
+         WHERE SEC_EJEC=@SecEjec AND ANNO_EJEC=@AnoEje
+           AND CENTRO_COSTO=@CentroCosto AND SEC_SOL_MOD=@SecSolicitud;
 
         INSERT INTO dbo.SIG_SOLICITUD_MODIFICACION_DET
             (SEC_EJEC, ANNO_EJEC, CENTRO_COSTO, SEC_SOL_MOD, SEC_SOL_MOD_DET,
@@ -518,7 +559,7 @@ BEGIN
              CANT_07_INI,CANT_08_INI,CANT_09_INI,CANT_10_INI,CANT_11_INI,CANT_12_INI,
              CUSER_ID, FECHA_REG, EQUIPO_REG)
         SELECT @SecEjec, @AnoEje, @CentroCosto, @SecSolicitud,
-               ROW_NUMBER() OVER (ORDER BY p.Codigo),
+               @DetBase + ROW_NUMBER() OVER (ORDER BY p.Codigo),
                @SecCuadro, @SecItem, p.AnnoProg, '1', @PrecioUnit,
                p.C01,p.C02,p.C03,p.C04,p.C05,p.C06,
                p.C07,p.C08,p.C09,p.C10,p.C11,p.C12,
@@ -526,23 +567,6 @@ BEGIN
                0,0,0,0,0,0,0,0,0,0,0,0,
                @Usuario, @Ahora, @Equipo
           FROM @P AS p;
-
-        /* ---- 2.9 Movimiento del documento ------------------------------ */
-        /* SEC_DOC_EST se numera por ejecutora y estado: la PK es
-           (SEC_EJEC, SEC_DOC_EST, ESTADO). */
-
-        SELECT @SecDocEstado = COALESCE(MAX(SEC_DOC_EST),0) + 1
-          FROM dbo.SIG_DOCUMENTO_ESTADO WITH (UPDLOCK, HOLDLOCK)
-         WHERE SEC_EJEC=@SecEjec AND ESTADO='2';
-
-        INSERT INTO dbo.SIG_DOCUMENTO_ESTADO
-            (SEC_EJEC, SEC_DOC_EST, ESTADO, FLAG_ULT_MOV, FECHA, OBSERVACION,
-             CUSER_ID, FECHA_REG, EQUIPO_REG, SOL_ANNO_EJEC, SOL_CC, SEC_SOL_MOD,
-             SOL_GRU_ANNO_EJEC, SOL_GRU_SEC)
-        VALUES
-            (@SecEjec, @SecDocEstado, '2', '1', @Ahora, NULL,
-             @Usuario, @Ahora, @Equipo, @AnoEje, @CentroCosto, @SecSolicitud,
-             NULL, NULL);
 
         UPDATE dbo.SIG_CUADRO_MODIFICADO
            SET CUSER_MOD=@Usuario, FECHA_MOD=@Ahora, EQUIPO_MOD=@Equipo

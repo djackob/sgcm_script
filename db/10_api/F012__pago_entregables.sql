@@ -219,6 +219,9 @@ BEGIN
     DECLARE @Codigo varchar(40), @MontoEnt decimal(18,2);
     DECLARE @IdExpPago uniqueidentifier, @IdPago uniqueidentifier;
     DECLARE @PayloadHito nvarchar(max);
+    DECLARE @RutaJson nvarchar(max) = COALESCE(
+        JSON_QUERY(@Payload, '$.Tdr.RutaInformePrevio'),
+        JSON_QUERY(@Payload, '$.RutaInformePrevio'));
 
     DECLARE c CURSOR LOCAL FAST_FORWARD FOR
         SELECT Numero, Nombre, Dias, Acum FROM @Ent ORDER BY Numero;
@@ -269,6 +272,31 @@ BEGIN
                  @Cuenta, @Ahora, @Equipo, @Programa);
 
             SELECT @IdPago = IdExpedientePago FROM pago.ExpedientePago WHERE IdExpediente = @IdExpPago;
+
+            /* Ruta del 8.1, congelada en este momento. Solo filas con unidad
+               y perfil que alguien ejerce: un texto libre del TDR antiguo no
+               entra y el pago sigue directo al area usuaria. */
+            IF @RutaJson IS NOT NULL AND ISJSON(@RutaJson) = 1
+            BEGIN
+                INSERT INTO pago.RutaInformePrevio
+                    (IdExpedientePago, Orden, IdUnidad, CodigoRol, NombreUnidad, NombreRol)
+                SELECT @IdPago,
+                       ROW_NUMBER() OVER (ORDER BY TRY_CONVERT(int, j.[key])),
+                       TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdUnidad')),
+                       LEFT(JSON_VALUE(j.value, '$.CodigoRol'), 40),
+                       LEFT(COALESCE(NULLIF(JSON_VALUE(j.value, '$.NombreUnidad'), N''), N''), 200),
+                       LEFT(JSON_VALUE(j.value, '$.NombreRol'), 150)
+                  FROM OPENJSON(@RutaJson) AS j
+                 WHERE TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdUnidad')) IS NOT NULL
+                   AND NULLIF(JSON_VALUE(j.value, '$.CodigoRol'), '') IS NOT NULL
+                   AND EXISTS (
+                        SELECT 1
+                          FROM sigcm.UsuarioRol AS ur
+                         WHERE ur.IdUnidad = TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdUnidad'))
+                           AND ur.CodigoRol = JSON_VALUE(j.value, '$.CodigoRol')
+                           AND ur.Activo = 1
+                           AND (ur.VigenteHasta IS NULL OR ur.VigenteHasta >= CONVERT(date, GETDATE())));
+            END
 
             INSERT INTO sigcm.Historial
                 (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
@@ -443,6 +471,20 @@ BEGIN
                                  pendiente. CONVERT a bit para que FOR JSON lo
                                  serialice como true/false y no como 1/0. */
                               MeToca = CONVERT(bit, CASE
+                                  WHEN e.CodigoEstado = 'PAG_PEND_VISTO_BUENO'
+                                   AND EXISTS (
+                                        SELECT 1
+                                          FROM pago.RutaInformePrevio AS rv
+                                         WHERE rv.IdExpedientePago = p.IdExpedientePago
+                                           AND rv.Otorgado = 0
+                                           AND rv.IdUnidad = @IdUnidad
+                                           AND rv.CodigoRol = @CodigoRol
+                                           AND rv.Orden = (
+                                                SELECT MIN(rv2.Orden)
+                                                  FROM pago.RutaInformePrevio AS rv2
+                                                 WHERE rv2.IdExpedientePago = p.IdExpedientePago
+                                                   AND rv2.Otorgado = 0))
+                                      THEN 1
                                   WHEN e.IdUnidadActual = @IdUnidad
                                    AND w.RolResponsable = @CodigoRol THEN 1
                                   ELSE 0
@@ -466,6 +508,35 @@ BEGIN
                                      AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS tr
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
+                                     AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     AND (
+                                          t.CodigoTransicion NOT IN ('PAG_OTORGAR_VB_SIGUIENTE', 'PAG_OTORGAR_VB_AU')
+                                       OR EXISTS (
+                                            SELECT 1
+                                              FROM pago.RutaInformePrevio AS rv
+                                             WHERE rv.IdExpedientePago = p.IdExpedientePago
+                                               AND rv.Otorgado = 0
+                                               AND rv.IdUnidad = @IdUnidad
+                                               AND rv.CodigoRol = @CodigoRol
+                                               AND rv.Orden = (
+                                                    SELECT MIN(rv2.Orden)
+                                                      FROM pago.RutaInformePrevio AS rv2
+                                                     WHERE rv2.IdExpedientePago = p.IdExpedientePago
+                                                       AND rv2.Otorgado = 0)
+                                               AND (
+                                                    (t.CodigoTransicion = 'PAG_OTORGAR_VB_SIGUIENTE'
+                                                     AND (SELECT COUNT(*)
+                                                            FROM pago.RutaInformePrevio AS rc
+                                                           WHERE rc.IdExpedientePago = p.IdExpedientePago
+                                                             AND rc.Otorgado = 0) > 1)
+                                                 OR (t.CodigoTransicion = 'PAG_OTORGAR_VB_AU'
+                                                     AND (SELECT COUNT(*)
+                                                            FROM pago.RutaInformePrevio AS rc
+                                                           WHERE rc.IdExpedientePago = p.IdExpedientePago
+                                                             AND rc.Otorgado = 0) = 1)
+                                               )
+                                          )
+                                     )
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
                               ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
@@ -517,6 +588,20 @@ BEGIN
                            la bandeja pagina: ordenar en el cliente solo
                            reacomodaria la pagina que ya llego. */
                         ORDER BY CASE
+                                     WHEN e.CodigoEstado = 'PAG_PEND_VISTO_BUENO'
+                                      AND EXISTS (
+                                           SELECT 1
+                                             FROM pago.RutaInformePrevio AS rv
+                                            WHERE rv.IdExpedientePago = p.IdExpedientePago
+                                              AND rv.Otorgado = 0
+                                              AND rv.IdUnidad = @IdUnidad
+                                              AND rv.CodigoRol = @CodigoRol
+                                              AND rv.Orden = (
+                                                   SELECT MIN(rv2.Orden)
+                                                     FROM pago.RutaInformePrevio AS rv2
+                                                    WHERE rv2.IdExpedientePago = p.IdExpedientePago
+                                                      AND rv2.Otorgado = 0))
+                                         THEN 0
                                      WHEN e.IdUnidadActual = @IdUnidad
                                       AND w.RolResponsable = @CodigoRol THEN 0
                                      ELSE 1
@@ -619,6 +704,13 @@ BEGIN
                                    WHERE h.IdExpedientePago = p.IdExpedientePago
                                    ORDER BY h.FechaHito
                                      FOR JSON PATH), N'[]')),
+                              RutaInformePrevio = JSON_QUERY(COALESCE((
+                                  SELECT rv.Orden, rv.IdUnidad, rv.CodigoRol,
+                                         rv.NombreUnidad, rv.NombreRol, rv.Otorgado, rv.OtorgadoEn
+                                    FROM pago.RutaInformePrevio AS rv
+                                   WHERE rv.IdExpedientePago = p.IdExpedientePago
+                                   ORDER BY rv.Orden
+                                     FOR JSON PATH), N'[]')),
                               Transiciones = JSON_QUERY(COALESCE((
                                   SELECT t.CodigoTransicion, t.NombreAccion,
                                          t.CodigoEstadoDestino, EstadoDestino = d.Nombre,
@@ -632,6 +724,35 @@ BEGIN
                                      AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS tr
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
+                                     AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     AND (
+                                          t.CodigoTransicion NOT IN ('PAG_OTORGAR_VB_SIGUIENTE', 'PAG_OTORGAR_VB_AU')
+                                       OR EXISTS (
+                                            SELECT 1
+                                              FROM pago.RutaInformePrevio AS rv
+                                             WHERE rv.IdExpedientePago = p.IdExpedientePago
+                                               AND rv.Otorgado = 0
+                                               AND rv.IdUnidad = @IdUnidad
+                                               AND rv.CodigoRol = @CodigoRol
+                                               AND rv.Orden = (
+                                                    SELECT MIN(rv2.Orden)
+                                                      FROM pago.RutaInformePrevio AS rv2
+                                                     WHERE rv2.IdExpedientePago = p.IdExpedientePago
+                                                       AND rv2.Otorgado = 0)
+                                               AND (
+                                                    (t.CodigoTransicion = 'PAG_OTORGAR_VB_SIGUIENTE'
+                                                     AND (SELECT COUNT(*)
+                                                            FROM pago.RutaInformePrevio AS rc
+                                                           WHERE rc.IdExpedientePago = p.IdExpedientePago
+                                                             AND rc.Otorgado = 0) > 1)
+                                                 OR (t.CodigoTransicion = 'PAG_OTORGAR_VB_AU'
+                                                     AND (SELECT COUNT(*)
+                                                            FROM pago.RutaInformePrevio AS rc
+                                                           WHERE rc.IdExpedientePago = p.IdExpedientePago
+                                                             AND rc.Otorgado = 0) = 1)
+                                               )
+                                          )
+                                     )
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]'))
                          FROM pago.ExpedientePago AS p
@@ -744,6 +865,7 @@ BEGIN
                                                 AND EXISTS (SELECT 1 FROM sigcm.TransicionRol AS tr
                                                              WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                                AND tr.CodigoRol = @CodigoRol)
+                                                AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
                                               ORDER BY t.CodigoTransicion
                                                 FOR JSON PATH), N'[]'))
                                     FROM pago.ExpedientePago AS p2
@@ -939,8 +1061,32 @@ BEGIN
                ProgramaModificacionAuditoria = @Programa
          WHERE IdExpedientePago = @IdPago;
 
-        DECLARE @CodigoTr varchar(70) = CASE WHEN @Estado = 'PAG_OBSERVADO_AU' THEN 'PAG_SUBSANAR' ELSE 'PAG_PRESENTAR' END;
+        /* La subsanacion vuelve al area usuaria: el visto bueno previo ya se
+           recorrio. La primera presentacion, si el 8.1 dejo pasos, entra por
+           el primero. */
+        DECLARE @PasosPendientes int = (
+            SELECT COUNT(*)
+              FROM pago.RutaInformePrevio
+             WHERE IdExpedientePago = @IdPago AND Otorgado = 0);
+        DECLARE @IdUnidadPaso uniqueidentifier = NULL;
+        DECLARE @CodigoTr varchar(70);
+
+        IF @Estado = 'PAG_OBSERVADO_AU'
+            SET @CodigoTr = 'PAG_SUBSANAR';
+        ELSE IF @PasosPendientes > 0
+        BEGIN
+            SET @CodigoTr = 'PAG_PRESENTAR_RUTA';
+            SELECT TOP 1 @IdUnidadPaso = IdUnidad
+              FROM pago.RutaInformePrevio
+             WHERE IdExpedientePago = @IdPago AND Otorgado = 0
+             ORDER BY Orden;
+        END
+        ELSE
+            SET @CodigoTr = 'PAG_PRESENTAR';
+
         SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', @CodigoTr);
+        IF @IdUnidadPaso IS NOT NULL
+            SET @parametro = JSON_MODIFY(@parametro, '$.IdUnidadDestino', CONVERT(varchar(36), @IdUnidadPaso));
         IF JSON_VALUE(@parametro, '$.Version') IS NULL
             SET @parametro = JSON_MODIFY(@parametro, '$.Version', @Version);
 
@@ -1582,6 +1728,123 @@ BEGIN
         SELECT @resultado;
     END TRY
     BEGIN CATCH
+        SELECT (
+            SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+    END CATCH
+END
+GO
+
+/* ========================================================================== */
+/* 16. pago.paOtorgarVistoBueno                                              */
+/* ========================================================================== */
+
+/*
+  El perfil del paso pendiente otorga el informe o el visto bueno. Si queda
+  otro paso, el expediente sigue en PAG_PEND_VISTO_BUENO y cambia de unidad.
+  Si era el ultimo, entra al especialista del area usuaria de origen.
+*/
+CREATE OR ALTER PROCEDURE pago.paOtorgarVistoBueno
+    @parametro nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @resultado nvarchar(max);
+    BEGIN TRY
+        IF ISJSON(@parametro) <> 1
+            THROW 51970, 'JSON incorrecto.', 1;
+
+        DECLARE @IdUsuario uniqueidentifier, @Cuenta varchar(120),
+                @NombreCompleto varchar(250), @Cargo varchar(180),
+                @CodigoRol varchar(40), @IdUnidad uniqueidentifier,
+                @CentroCostoActor varchar(15), @EsTitular bit,
+                @Ip varchar(45), @Equipo varchar(50), @Programa varchar(50),
+                @CorrelacionId uniqueidentifier;
+
+        EXEC sigcm.paResolverActor @parametro,
+             @IdUsuario OUTPUT, @Cuenta OUTPUT, @NombreCompleto OUTPUT, @Cargo OUTPUT,
+             @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
+             @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
+
+        DECLARE @IdExpediente uniqueidentifier =
+            TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdExpediente'));
+        IF @IdExpediente IS NULL
+            THROW 51971, 'VALIDACION_PAYLOAD: falta IdExpediente.', 1;
+
+        DECLARE @IdPago uniqueidentifier, @Estado varchar(60), @Version int,
+                @IdUnidadOrigen uniqueidentifier;
+        SELECT @IdPago = p.IdExpedientePago, @Estado = e.CodigoEstado, @Version = e.Version,
+               @IdUnidadOrigen = e.IdUnidadOrigen
+          FROM pago.ExpedientePago AS p
+          JOIN sigcm.Expediente AS e ON e.IdExpediente = p.IdExpediente
+         WHERE p.IdExpediente = @IdExpediente AND p.Activo = 1;
+
+        IF @IdPago IS NULL
+            THROW 51972, 'NO_ENCONTRADO: el expediente de pago no existe.', 1;
+        IF @Estado <> 'PAG_PEND_VISTO_BUENO'
+            THROW 51973, 'CONFLICTO_ESTADO: el expediente no esta pendiente de informe tecnico / visto bueno.', 1;
+
+        DECLARE @Orden smallint, @IdUnidadPaso uniqueidentifier, @RolPaso varchar(40);
+        SELECT TOP 1 @Orden = rv.Orden, @IdUnidadPaso = rv.IdUnidad, @RolPaso = rv.CodigoRol
+          FROM pago.RutaInformePrevio AS rv
+         WHERE rv.IdExpedientePago = @IdPago AND rv.Otorgado = 0
+         ORDER BY rv.Orden;
+
+        IF @Orden IS NULL
+            THROW 51974, 'CONFLICTO_RUTA: este expediente no tiene un visto bueno pendiente.', 1;
+        IF @IdUnidad <> @IdUnidadPaso OR @CodigoRol <> @RolPaso
+            THROW 51975, 'NO_AUTORIZADO: el informe o visto bueno le corresponde a otro perfil.', 1;
+
+        DECLARE @IdUnidadSiguiente uniqueidentifier;
+        SELECT TOP 1 @IdUnidadSiguiente = rv.IdUnidad
+          FROM pago.RutaInformePrevio AS rv
+         WHERE rv.IdExpedientePago = @IdPago
+           AND rv.Otorgado = 0
+           AND rv.Orden > @Orden
+         ORDER BY rv.Orden;
+
+        DECLARE @CodigoTr varchar(70) =
+            CASE WHEN @IdUnidadSiguiente IS NULL THEN 'PAG_OTORGAR_VB_AU' ELSE 'PAG_OTORGAR_VB_SIGUIENTE' END;
+        DECLARE @Destino uniqueidentifier =
+            CASE WHEN @IdUnidadSiguiente IS NULL THEN @IdUnidadOrigen ELSE @IdUnidadSiguiente END;
+
+        IF @Destino IS NULL
+            THROW 51976, 'CONFLICTO_RUTA: no hay unidad de destino para el visto bueno.', 1;
+
+        BEGIN TRANSACTION;
+
+        UPDATE pago.RutaInformePrevio
+           SET Otorgado = 1,
+               OtorgadoEn = GETDATE(),
+               IdUsuarioOtorga = @IdUsuario
+         WHERE IdExpedientePago = @IdPago
+           AND Orden = @Orden
+           AND Otorgado = 0;
+
+        IF @@ROWCOUNT <> 1
+            THROW 51977, 'CONFLICTO_RUTA: el paso ya fue otorgado.', 1;
+
+        SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', @CodigoTr);
+        SET @parametro = JSON_MODIFY(@parametro, '$.IdUnidadDestino', CONVERT(varchar(36), @Destino));
+        IF JSON_VALUE(@parametro, '$.Version') IS NULL
+            SET @parametro = JSON_MODIFY(@parametro, '$.Version', @Version);
+
+        EXEC sigcm.paEjecutarTransicion @parametro;
+
+        DECLARE @VersionNueva int;
+        SELECT @VersionNueva = Version FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente;
+
+        IF @VersionNueva = @Version + 1
+        BEGIN
+            IF @@TRANCOUNT > 0 COMMIT TRANSACTION;
+        END
+        ELSE IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT (
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

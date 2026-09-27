@@ -522,7 +522,21 @@ BEGIN
                         /* Escribe en SIG_CUADRO_MODIFICADO, no en
                            SIG_CUADRO_NECESIDAD: la ruta de formulacion esta
                            cerrada desde enero y un item puesto ahi no llega al
-                           cuadro que el area usuaria ve hoy. */
+                           cuadro que el area usuaria ve hoy.
+
+                           Un registro masivo (varios items de la misma
+                           solicitud y el mismo centro) reutiliza la solicitud
+                           SIGA del primer item. Si no, cada item abre otra
+                           SIG_SOLICITUD_MODIFICACION. */
+                        SELECT TOP 1 @SecSolicitud =
+                               TRY_CONVERT(numeric(10,0), JSON_VALUE(m.PayloadRespuesta, '$.SecSolicitud'))
+                          FROM integracion.MapeoCmn AS m
+                         WHERE m.IdSolicitud = @idSol
+                           AND m.CentroCosto = @CentroCosto
+                           AND JSON_VALUE(m.PayloadRespuesta, '$.Operacion') = 'INCLUIR_ITEM'
+                           AND JSON_VALUE(m.PayloadRespuesta, '$.SecSolicitud') IS NOT NULL
+                         ORDER BY m.RegistradoEnSiga;
+
                         EXEC siga.usp_ext_incluir_item_cmn
                              @AnoEje      = @AnoEje,
                              @SecEjec     = @SecEjec,

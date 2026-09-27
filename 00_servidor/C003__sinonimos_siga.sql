@@ -95,6 +95,10 @@ INSERT INTO @tablas (tabla) VALUES
        estado real de la O/S (hitos 1 y 4). Ver siga.vwOrdenServicioSiga. */
     (N'SIG_ORDEN_ADQUISICION'),
     (N'SIG_ORDEN_INTERFASE'),
+    /* Certificacion presupuestaria y el estado que SIAF devolvio a SIGA
+       (NRO_CERTIFICA_SIAF / ESTADO_CERTIFICA_SIAF). Lo lee
+       requerimiento.paConsultarEstadoCcp. */
+    (N'SIG_CERTIFICACION'),
     (N'SIG_CONTRATISTAS'),
     /* Nombre de actividad/proyecto (CUI o idea) para el TDR Anexo 3. */
     (N'ACT_PROY_NOMBRE');

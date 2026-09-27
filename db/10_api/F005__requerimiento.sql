@@ -1065,6 +1065,7 @@ BEGIN
                               r.CodigoDec, r.CondicionCmn, r.Monto, r.PlazoDias,
                               r.FechaInicioPrevisto,
                               e.IdExpediente, e.CodigoEstado, e.Version,
+                              CreadoEn = e.FechaCreacionAuditoria,
                               Estado = w.Nombre,
                               RolResponsable = w.RolResponsable,
                               Items = (SELECT COUNT(*) FROM requerimiento.RequerimientoItem AS it
@@ -1156,8 +1157,8 @@ BEGIN
                           AND (@CodigoTipoContratacion IS NULL OR r.CodigoTipoContratacion = @CodigoTipoContratacion)
                           AND (@Texto        IS NULL OR r.Codigo LIKE '%' + @Texto + '%'
                                                      OR r.Denominacion LIKE '%' + @Texto + '%')
-                        ORDER BY e.FechaCreacionAuditoria DESC,
-                                 ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
+                        ORDER BY e.FechaCreacionAuditoria ASC,
+                                 r.Codigo ASC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),
                    'OK' AS mensaje
