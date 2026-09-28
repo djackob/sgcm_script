@@ -214,6 +214,7 @@ BEGIN
         SET @MontoContrato = ROUND(@MontoMensual * @CantEnt, 2);
 
     DECLARE @BaseFecha date = CONVERT(date, COALESCE(@NotificadoEn, @FechaEmision, @FechaInicio, GETDATE()));
+    DECLARE @TipoOrden char(2) = CASE WHEN @TipoCon LIKE '%BIEN%' THEN 'OC' ELSE 'OS' END;
     DECLARE @Ahora datetime = GETDATE();
     DECLARE @Numero smallint, @Nombre nvarchar(300), @Dias int, @Acum int;
     DECLARE @Codigo varchar(40), @MontoEnt decimal(18,2);
@@ -236,6 +237,13 @@ BEGIN
             SET @Codigo = NULL;
             EXEC sigcm.paSiguienteCodigo
                  'PAG', @AnoEje, N'pago.SeqExpedientePago', @Codigo OUTPUT;
+            IF NULLIF(@NumeroOrden, '') IS NOT NULL
+            BEGIN
+                DECLARE @CodigoPago varchar(40) =
+                    pago.fnCodigoExpedientePago(@Codigo, @TipoOrden, @NumeroOrden, @Numero);
+                IF NOT EXISTS (SELECT 1 FROM sigcm.Expediente WHERE Codigo = @CodigoPago)
+                    SET @Codigo = @CodigoPago;
+            END
 
             SET @MontoEnt =
                 CASE WHEN @MontoMensual IS NOT NULL AND @MontoMensual > 0 THEN ROUND(@MontoMensual, 2)
@@ -259,7 +267,7 @@ BEGIN
                 (IdExpediente, IdRequerimiento, IdOrdenServicio, CodigoRequerimiento,
                  NumeroOrdenSiga, NumeroPedidoSiga, MetaPresupuestal, ClasificadorGasto,
                  NumeroEntregable, NombreEntregable, PlazoDias, MontoEntregable, MontoContrato,
-                 PlazoContratoDias, FechaLimiteCronograma,
+                 PlazoContratoDias, FechaLimiteCronograma, TipoOrden,
                  RucLocador, DniLocador, NombreLocador, CorreoLocador, Cci,
                  UsuarioCreacionAuditoria, FechaCreacionAuditoria,
                  EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
@@ -267,7 +275,10 @@ BEGIN
                 (@IdExpPago, @IdRequerimiento, @IdOrden, @CodigoReq,
                  @NumeroOrden, @Pedido, @Meta, @Clasificador,
                  @Numero, @Nombre, @Dias, @MontoEnt, @MontoContrato,
-                 @PlazoDias, DATEADD(DAY, @Acum, @BaseFecha),
+                 /* Plazo en dias calendario; si vence en dia inhabil, el
+                    vencimiento pasa al siguiente dia habil. La mora se
+                    cuenta en calendario desde esta fecha. */
+                 @PlazoDias, sigcm.fnSiguienteDiaHabil(DATEADD(DAY, @Acum, @BaseFecha)), @TipoOrden,
                  @Ruc, @Dni, @NombreLocador, @Email, @Cci,
                  @Cuenta, @Ahora, @Equipo, @Programa);
 
@@ -280,8 +291,15 @@ BEGIN
             BEGIN
                 INSERT INTO pago.RutaInformePrevio
                     (IdExpedientePago, Orden, IdUnidad, CodigoRol, NombreUnidad, NombreRol)
+                /* Vistos buenos de menor a mayor jerarquia hasta la jefatura;
+                   a igual nivel, el orden del 8.1. */
                 SELECT @IdPago,
-                       ROW_NUMBER() OVER (ORDER BY TRY_CONVERT(int, j.[key])),
+                       ROW_NUMBER() OVER (ORDER BY
+                           CASE WHEN JSON_VALUE(j.value, '$.CodigoRol') LIKE '%ESPECIALISTA' THEN 1
+                                WHEN JSON_VALUE(j.value, '$.CodigoRol') LIKE '%COORDINADOR' THEN 2
+                                WHEN JSON_VALUE(j.value, '$.CodigoRol') LIKE '%JEFE' THEN 3
+                                ELSE 2 END,
+                           TRY_CONVERT(int, j.[key])),
                        TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.value, '$.IdUnidad')),
                        LEFT(JSON_VALUE(j.value, '$.CodigoRol'), 40),
                        LEFT(COALESCE(NULLIF(JSON_VALUE(j.value, '$.NombreUnidad'), N''), N''), 200),
@@ -404,21 +422,27 @@ BEGIN
           FROM sigcm.Usuario WHERE IdUsuario = @IdUsuario;
 
         DECLARE @SoloMiBandeja bit, @CodigoEstado varchar(60), @AnoEje smallint,
-                @Texto varchar(200), @Limite int, @Desplazamiento int;
+                @Texto varchar(200), @Limite int, @Desplazamiento int, @Alerta varchar(20);
 
         SELECT @SoloMiBandeja = ISNULL(SoloMiBandeja, 1),
                @CodigoEstado  = CodigoEstado,
                @AnoEje        = AnoEje,
-               @Texto         = Texto,
+               @Texto         = NULLIF(LTRIM(RTRIM(Texto)), ''),
                @Limite        = Limite,
-               @Desplazamiento = Desplazamiento
+               @Desplazamiento = Desplazamiento,
+               @Alerta        = NULLIF(Alerta, '')
         FROM OPENJSON(@parametro, '$.Filtro')
         WITH (
             SoloMiBandeja bit, CodigoEstado varchar(60), AnoEje smallint,
-            Texto varchar(200), Limite int, Desplazamiento int
+            Texto varchar(200), Limite int, Desplazamiento int, Alerta varchar(20)
         );
 
-        SET @SoloMiBandeja  = ISNULL(@SoloMiBandeja, 1);
+        /* Ver todos los expedientes de la entidad es consulta de Abastecimiento
+           (reunion 27-09-2026); el resto ve lo de su unidad. La penalidad en
+           soles tambien es solo de Abastecimiento. */
+        DECLARE @EsAbast bit = CASE WHEN @CodigoRol LIKE 'ABAST[_]%' THEN 1 ELSE 0 END;
+        DECLARE @Hoy date = CONVERT(date, GETDATE());
+        SET @SoloMiBandeja  = CASE WHEN @EsAbast = 1 THEN ISNULL(@SoloMiBandeja, 1) ELSE 1 END;
         SET @Limite         = CASE WHEN @Limite IS NULL OR @Limite <= 0 THEN 50
                                    WHEN @Limite > 200 THEN 200 ELSE @Limite END;
         SET @Desplazamiento = CASE WHEN @Desplazamiento IS NULL OR @Desplazamiento < 0
@@ -437,6 +461,15 @@ BEGIN
                 OR p.CodigoRequerimiento LIKE '%' + @Texto + '%'
                 OR p.NumeroOrdenSiga LIKE '%' + @Texto + '%'
                 OR p.NombreLocador LIKE '%' + @Texto + '%')
+           AND (@Alerta IS NULL
+                OR (@Alerta = 'PENDIENTE'
+                    AND pago.fnMeToca(p.IdExpedientePago, e.CodigoEstado, e.IdUnidadActual,
+                                      e.IdResponsableActual, w.RolResponsable,
+                                      @IdUsuario, @CodigoRol, @IdUnidad) = 1)
+                OR (@Alerta = 'POR_VENCER' AND e.CodigoEstado = 'PAG_PENDIENTE'
+                    AND p.FechaLimiteCronograma BETWEEN @Hoy AND DATEADD(DAY, 7, @Hoy))
+                OR (@Alerta = 'VENCIDO' AND e.CodigoEstado = 'PAG_PENDIENTE'
+                    AND p.FechaLimiteCronograma < @Hoy))
            AND (
                 @CodigoRol = 'PROVEEDOR'
                 AND (
@@ -470,31 +503,20 @@ BEGIN
                                  unidad y esto es lo que la pantalla pinta como
                                  pendiente. CONVERT a bit para que FOR JSON lo
                                  serialice como true/false y no como 1/0. */
-                              MeToca = CONVERT(bit, CASE
-                                  WHEN e.CodigoEstado = 'PAG_PEND_VISTO_BUENO'
-                                   AND EXISTS (
-                                        SELECT 1
-                                          FROM pago.RutaInformePrevio AS rv
-                                         WHERE rv.IdExpedientePago = p.IdExpedientePago
-                                           AND rv.Otorgado = 0
-                                           AND rv.IdUnidad = @IdUnidad
-                                           AND rv.CodigoRol = @CodigoRol
-                                           AND rv.Orden = (
-                                                SELECT MIN(rv2.Orden)
-                                                  FROM pago.RutaInformePrevio AS rv2
-                                                 WHERE rv2.IdExpedientePago = p.IdExpedientePago
-                                                   AND rv2.Otorgado = 0))
-                                      THEN 1
-                                  WHEN e.IdUnidadActual = @IdUnidad
-                                   AND w.RolResponsable = @CodigoRol THEN 1
-                                  ELSE 0
-                              END),
-                              p.IdRequerimiento, p.CodigoRequerimiento, p.NumeroOrdenSiga,
+                              MeToca = pago.fnMeToca(p.IdExpedientePago, e.CodigoEstado, e.IdUnidadActual,
+                                                     e.IdResponsableActual, w.RolResponsable,
+                                                     @IdUsuario, @CodigoRol, @IdUnidad),
+                              p.IdRequerimiento, p.CodigoRequerimiento, p.NumeroOrdenSiga, p.TipoOrden,
                               p.NumeroEntregable, p.NombreEntregable, p.PlazoDias,
                               p.MontoEntregable, p.MontoContrato, p.FechaLimiteCronograma,
-                              p.FechaPresentacion, p.DiasAtraso, p.MontoPenalidad,
+                              p.FechaPresentacion, p.DiasAtraso,
+                              MontoPenalidad = CASE WHEN @EsAbast = 1 THEN p.MontoPenalidad END,
+                              CorrespondePenalidad = CONVERT(bit, CASE WHEN p.MontoPenalidad > 0 THEN 1 ELSE 0 END),
                               p.AlertaResolucion, p.NombreLocador, p.RucLocador, p.DniLocador,
                               p.ExpedienteSiaf, p.NotaPagoSiaf,
+                              ResponsableAsignado = (SELECT CONCAT_WS(' ', ua.Nombres, ua.Apellidos)
+                                                       FROM sigcm.Usuario AS ua
+                                                      WHERE ua.IdUsuario = e.IdResponsableActual),
                               Transiciones = JSON_QUERY(COALESCE((
                                   SELECT t.CodigoTransicion, t.NombreAccion,
                                          t.CodigoEstadoDestino, EstadoDestino = d.Nombre,
@@ -509,6 +531,10 @@ BEGIN
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
                                      AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     /* Asignado por el jefe: solo el especialista elegido actua. */
+                                     AND (e.IdResponsableActual IS NULL
+                                          OR e.IdResponsableActual = @IdUsuario
+                                          OR @CodigoRol <> 'AREA_ESPECIALISTA')
                                      AND (
                                           t.CodigoTransicion NOT IN ('PAG_OTORGAR_VB_SIGUIENTE', 'PAG_OTORGAR_VB_AU')
                                        OR EXISTS (
@@ -533,7 +559,7 @@ BEGIN
                                                      AND (SELECT COUNT(*)
                                                             FROM pago.RutaInformePrevio AS rc
                                                            WHERE rc.IdExpedientePago = p.IdExpedientePago
-                                                             AND rc.Otorgado = 0) = 1)
+                                                             AND rc.Otorgado = 0) >= 1)
                                                )
                                           )
                                      )
@@ -551,6 +577,15 @@ BEGIN
                                OR p.CodigoRequerimiento LIKE '%' + @Texto + '%'
                                OR p.NumeroOrdenSiga LIKE '%' + @Texto + '%'
                                OR p.NombreLocador LIKE '%' + @Texto + '%')
+                          AND (@Alerta IS NULL
+                               OR (@Alerta = 'PENDIENTE'
+                                   AND pago.fnMeToca(p.IdExpedientePago, e.CodigoEstado, e.IdUnidadActual,
+                                                     e.IdResponsableActual, w.RolResponsable,
+                                                     @IdUsuario, @CodigoRol, @IdUnidad) = 1)
+                               OR (@Alerta = 'POR_VENCER' AND e.CodigoEstado = 'PAG_PENDIENTE'
+                                   AND p.FechaLimiteCronograma BETWEEN @Hoy AND DATEADD(DAY, 7, @Hoy))
+                               OR (@Alerta = 'VENCIDO' AND e.CodigoEstado = 'PAG_PENDIENTE'
+                                   AND p.FechaLimiteCronograma < @Hoy))
                           AND (
                                @CodigoRol = 'PROVEEDOR'
                                AND (
@@ -587,25 +622,9 @@ BEGIN
                            grupo lo mas reciente. El orden es del servidor porque
                            la bandeja pagina: ordenar en el cliente solo
                            reacomodaria la pagina que ya llego. */
-                        ORDER BY CASE
-                                     WHEN e.CodigoEstado = 'PAG_PEND_VISTO_BUENO'
-                                      AND EXISTS (
-                                           SELECT 1
-                                             FROM pago.RutaInformePrevio AS rv
-                                            WHERE rv.IdExpedientePago = p.IdExpedientePago
-                                              AND rv.Otorgado = 0
-                                              AND rv.IdUnidad = @IdUnidad
-                                              AND rv.CodigoRol = @CodigoRol
-                                              AND rv.Orden = (
-                                                   SELECT MIN(rv2.Orden)
-                                                     FROM pago.RutaInformePrevio AS rv2
-                                                    WHERE rv2.IdExpedientePago = p.IdExpedientePago
-                                                      AND rv2.Otorgado = 0))
-                                         THEN 0
-                                     WHEN e.IdUnidadActual = @IdUnidad
-                                      AND w.RolResponsable = @CodigoRol THEN 0
-                                     ELSE 1
-                                 END,
+                        ORDER BY pago.fnMeToca(p.IdExpedientePago, e.CodigoEstado, e.IdUnidadActual,
+                                               e.IdResponsableActual, w.RolResponsable,
+                                               @IdUsuario, @CodigoRol, @IdUnidad) DESC,
                                  e.FechaModificacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
@@ -652,6 +671,7 @@ BEGIN
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdExpediente'));
         DECLARE @IdExpedientePago uniqueidentifier =
             TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdExpedientePago'));
+        DECLARE @EsAbast bit = CASE WHEN @CodigoRol LIKE 'ABAST[_]%' THEN 1 ELSE 0 END;
 
         IF @IdExpediente IS NULL AND @IdExpedientePago IS NOT NULL
             SELECT @IdExpediente = IdExpediente FROM pago.ExpedientePago WHERE IdExpedientePago = @IdExpedientePago;
@@ -668,6 +688,17 @@ BEGIN
                        SELECT p.IdExpedientePago, e.IdExpediente, e.Codigo, e.CodigoEstado, e.Version,
                               Estado = w.Nombre, RolResponsable = w.RolResponsable,
                               e.AnoEje, p.IdRequerimiento, p.CodigoRequerimiento, p.NumeroOrdenSiga,
+                              p.TipoOrden, p.NumeroContrato,
+                              UnidadOrigen = uo.Nombre,
+                              FechaInicioContrato = CONVERT(date, COALESCE(os.NotificadoEn, os.FechaEmision, r.FechaInicioPrevisto)),
+                              FechaFinContrato = (SELECT MAX(p3.FechaLimiteCronograma)
+                                                    FROM pago.ExpedientePago AS p3
+                                                   WHERE p3.IdRequerimiento = p.IdRequerimiento
+                                                     AND p3.Activo = 1),
+                              ResponsableAsignado = (SELECT CONCAT_WS(' ', ua.Nombres, ua.Apellidos)
+                                                       FROM sigcm.Usuario AS ua
+                                                      WHERE ua.IdUsuario = e.IdResponsableActual),
+                              e.IdResponsableActual,
                               p.NumeroPedidoSiga, p.MetaPresupuestal, p.ClasificadorGasto,
                               p.NumeroEntregable, p.NombreEntregable, p.PlazoDias,
                               p.MontoEntregable, p.MontoContrato, p.PlazoContratoDias,
@@ -677,7 +708,10 @@ BEGIN
                               p.Cci, p.Banco, p.RheSerie, p.RheNumero, p.RheValidadoSunat,
                               p.RheOrigenValidacion, p.BloqueoRendicion, p.AplicaRetencion4ta,
                               p.SubsanacionTardia, p.RetrasoJustificado, p.DiasAtraso,
-                              p.PenalidadDiaria, p.MontoPenalidad, p.MontoPenalidadAcumulada,
+                              PenalidadDiaria = CASE WHEN @EsAbast = 1 THEN p.PenalidadDiaria END,
+                              MontoPenalidad = CASE WHEN @EsAbast = 1 THEN p.MontoPenalidad END,
+                              MontoPenalidadAcumulada = CASE WHEN @EsAbast = 1 THEN p.MontoPenalidadAcumulada END,
+                              CorrespondePenalidad = CONVERT(bit, CASE WHEN p.MontoPenalidad > 0 THEN 1 ELSE 0 END),
                               p.AlertaResolucion, p.ObservacionAu, p.ObservacionUc,
                               p.DestinoDevolucionUc, p.ExpedienteSiaf, p.FechaDevengado,
                               p.NotaPagoSiaf, p.FechaAbono, p.NumeroOperacion,
@@ -686,6 +720,16 @@ BEGIN
                               p.Suspension4taDocumento, p.NotaPagoDocumento,
                               p.ConstanciaDocumento, p.PapeletaPenalidadDocumento,
                               r.Denominacion,
+                              DocumentosAdicionales = JSON_QUERY(COALESCE((
+                                  SELECT da.IdDocumentoAdicional, da.GeneradoDocumento,
+                                         da.NombreDocumento, da.Descripcion, da.NombreUsuario,
+                                         da.CodigoRol, SubidoEn = da.FechaCreacionAuditoria,
+                                         PuedeRetirar = CONVERT(bit, CASE
+                                             WHEN da.IdUsuario = @IdUsuario OR @EsAbast = 1 THEN 1 ELSE 0 END)
+                                    FROM pago.DocumentoAdicional AS da
+                                   WHERE da.IdExpedientePago = p.IdExpedientePago AND da.Activo = 1
+                                   ORDER BY da.FechaCreacionAuditoria
+                                     FOR JSON PATH), N'[]')),
                               Checklist = JSON_QUERY(COALESCE((
                                   SELECT i.CodigoItem, i.Nombre, i.Orden, i.Obligatorio,
                                          Valor = ISNULL(m.Valor, N''),
@@ -725,6 +769,10 @@ BEGIN
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
                                      AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     /* Asignado por el jefe: solo el especialista elegido actua. */
+                                     AND (e.IdResponsableActual IS NULL
+                                          OR e.IdResponsableActual = @IdUsuario
+                                          OR @CodigoRol <> 'AREA_ESPECIALISTA')
                                      AND (
                                           t.CodigoTransicion NOT IN ('PAG_OTORGAR_VB_SIGUIENTE', 'PAG_OTORGAR_VB_AU')
                                        OR EXISTS (
@@ -749,7 +797,7 @@ BEGIN
                                                      AND (SELECT COUNT(*)
                                                             FROM pago.RutaInformePrevio AS rc
                                                            WHERE rc.IdExpedientePago = p.IdExpedientePago
-                                                             AND rc.Otorgado = 0) = 1)
+                                                             AND rc.Otorgado = 0) >= 1)
                                                )
                                           )
                                      )
@@ -759,6 +807,8 @@ BEGIN
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = p.IdExpediente
                          JOIN sigcm.Estado AS w ON w.CodigoEstado = e.CodigoEstado
                          JOIN requerimiento.Requerimiento AS r ON r.IdRequerimiento = p.IdRequerimiento
+                         LEFT JOIN requerimiento.OrdenServicio AS os ON os.IdOrdenServicio = p.IdOrdenServicio
+                         LEFT JOIN sigcm.Unidad AS uo ON uo.IdUnidad = e.IdUnidadOrigen
                         WHERE p.IdExpediente = @IdExpediente AND p.Activo = 1
                           FOR JSON PATH, WITHOUT_ARRAY_WRAPPER))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
@@ -1090,7 +1140,23 @@ BEGIN
         IF JSON_VALUE(@parametro, '$.Version') IS NULL
             SET @parametro = JSON_MODIFY(@parametro, '$.Version', @Version);
 
+        /* La subsanacion vuelve al especialista que observo, no a la bandeja
+           del jefe: la asignacion ya se hizo. */
+        DECLARE @EspecialistaObs uniqueidentifier = NULL;
+        IF @CodigoTr = 'PAG_SUBSANAR'
+            SELECT TOP 1 @EspecialistaObs = h.IdActor
+              FROM sigcm.Historial AS h
+             WHERE h.IdExpediente = @IdExpediente
+               AND h.CodigoTransicion = 'PAG_OBSERVAR_AU'
+             ORDER BY h.OcurridoEn DESC, h.IdHistorial DESC;
+
         EXEC sigcm.paEjecutarTransicion @parametro;
+
+        IF @EspecialistaObs IS NOT NULL
+            UPDATE sigcm.Expediente
+               SET IdResponsableActual = @EspecialistaObs
+             WHERE IdExpediente = @IdExpediente
+               AND CodigoEstado = 'PAG_ENTREGABLE_PRESENTADO';
         RETURN;
     END TRY
     BEGIN CATCH
@@ -1145,12 +1211,11 @@ BEGIN
         IF @IdPago IS NULL
             THROW 51953, 'NO_ENCONTRADO: el expediente de pago no existe.', 1;
 
-        DECLARE @DiasSub int = CEILING(@Plazo * 0.30);
-        IF @DiasSub < 1 SET @DiasSub = 1;
-
+        /* El plazo de subsanacion lo fija Abastecimiento al notificar al
+           proveedor (pago.paNotificarObservacion). */
         UPDATE pago.ExpedientePago
            SET ObservacionAu = @Comentario,
-               FechaLimiteSubsanacion = DATEADD(DAY, @DiasSub, GETDATE()),
+               FechaLimiteSubsanacion = NULL,
                UsuarioModificacionAuditoria = @Cuenta,
                FechaModificacionAuditoria = GETDATE(),
                EquipoModificacionAuditoria = @Equipo,
@@ -1742,7 +1807,8 @@ GO
 /*
   El perfil del paso pendiente otorga el informe o el visto bueno. Si queda
   otro paso, el expediente sigue en PAG_PEND_VISTO_BUENO y cambia de unidad.
-  Si era el ultimo, entra al especialista del area usuaria de origen.
+  Si era el ultimo, entra al area usuaria de origen (PAG_RECIBIDO_AU, S052),
+  donde el jefe o la secretaria lo asignan a un especialista.
 */
 CREATE OR ALTER PROCEDURE pago.paOtorgarVistoBueno
     @parametro nvarchar(max)
@@ -1825,6 +1891,49 @@ BEGIN
 
         IF @@ROWCOUNT <> 1
             THROW 51977, 'CONFLICTO_RUTA: el paso ya fue otorgado.', 1;
+
+        /* Paso intermedio: el estado no cambia (sigcm.Transicion no admite
+           origen = destino), solo la unidad que debe otorgar. */
+        IF @IdUnidadSiguiente IS NOT NULL
+        BEGIN
+            DECLARE @VersionCliente int = TRY_CONVERT(int, JSON_VALUE(@parametro, '$.Version'));
+            IF @VersionCliente IS NOT NULL AND @VersionCliente <> @Version
+                THROW 51978, 'CONFLICTO_VERSION: el expediente cambio mientras lo revisaba. Vuelva a abrirlo.', 1;
+
+            UPDATE sigcm.Expediente
+               SET IdUnidadActual = @IdUnidadSiguiente,
+                   IdResponsableActual = NULL,
+                   Version = @Version + 1,
+                   UsuarioModificacionAuditoria = LEFT(@Cuenta, 30),
+                   FechaModificacionAuditoria = GETDATE(),
+                   EquipoModificacionAuditoria = @Equipo,
+                   ProgramaModificacionAuditoria = @Programa
+             WHERE IdExpediente = @IdExpediente AND Version = @Version;
+
+            IF @@ROWCOUNT <> 1
+                THROW 51978, 'CONFLICTO_VERSION: el expediente cambio mientras lo revisaba. Vuelva a abrirlo.', 1;
+
+            INSERT INTO sigcm.Historial
+                (IdExpediente, CodigoEstadoOrigen, CodigoEstadoDestino, CodigoTransicion,
+                 Comentario, IdActor, ActorRol, IdActorUnidad, Metadata,
+                 UsuarioCreacionAuditoria, EquipoCreacionAuditoria, ProgramaCreacionAuditoria)
+            VALUES
+                (@IdExpediente, @Estado, @Estado, NULL,
+                 COALESCE(NULLIF(JSON_VALUE(@parametro, '$.Comentario'), N''),
+                          CONCAT(N'Visto bueno otorgado (paso ', @Orden, N'). Pasa al siguiente perfil de la ruta.')),
+                 @IdUsuario, @CodigoRol, @IdUnidad,
+                 (SELECT @Orden AS PasoOtorgado, @IdUnidadSiguiente AS IdUnidadSiguiente
+                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                 LEFT(@Cuenta, 30), @Equipo, @Programa);
+
+            COMMIT TRANSACTION;
+
+            SELECT (SELECT 1 AS estado,
+                           N'Visto bueno otorgado. El expediente pasa al siguiente perfil de la ruta.' AS mensaje,
+                           @Version + 1 AS Version
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+            RETURN;
+        END
 
         SET @parametro = JSON_MODIFY(@parametro, '$.CodigoTransicion', @CodigoTr);
         SET @parametro = JSON_MODIFY(@parametro, '$.IdUnidadDestino', CONVERT(varchar(36), @Destino));

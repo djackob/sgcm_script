@@ -152,13 +152,15 @@ BEGIN
 
         DECLARE @Estado char(1), @EstadoSiaf char(1), @Aprobada bit,
                 @ExpSiaf varchar(20), @NroCertifica bigint,
-                @FlagRecepcion char(1), @FechaRecepcion date, @TieneInterfase bit;
+                @FlagRecepcion char(1), @FechaRecepcion date, @TieneInterfase bit,
+                @FechaOrden date, @MontoTotal decimal(18,2);
 
         IF @NroSiga IS NOT NULL
             SELECT @Estado = v.Estado, @EstadoSiaf = v.EstadoSiaf, @Aprobada = v.Aprobada,
                    @ExpSiaf = v.ExpedienteSiaf, @NroCertifica = v.NroCertifica,
                    @FlagRecepcion = v.FlagRecepcion, @FechaRecepcion = v.FechaRecepcion,
-                   @TieneInterfase = v.TieneInterfase
+                   @TieneInterfase = v.TieneInterfase,
+                   @FechaOrden = CONVERT(date, v.FechaOrden), @MontoTotal = v.MontoTotal
               FROM siga.vwOrdenServicioSiga AS v
              WHERE v.AnoEje = @AnoEje AND v.SecEjec = @SecEjec
                AND v.TipoBien = 'S' AND v.NumeroOrden = @NroSiga;
@@ -217,6 +219,8 @@ BEGIN
                    NroCertifica   = @NroCertifica,
                    FlagRecepcion  = @FlagRecepcion,
                    FechaRecepcion = @FechaRecepcion,
+                   FechaOrden     = @FechaOrden,
+                   MontoTotal     = @MontoTotal,
                    mensaje        = @MsgHito1
               FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
 
