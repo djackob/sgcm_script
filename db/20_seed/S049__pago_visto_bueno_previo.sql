@@ -59,9 +59,9 @@ INSERT INTO @Tr VALUES
   ('PAG_PRESENTAR_RUTA', 'PAG_PENDIENTE', 'PAG_PEND_VISTO_BUENO',
    'Presentar entregable y RHE', 0, 0, NULL, 0, NULL, 0),
 
-  ('PAG_OTORGAR_VB_SIGUIENTE', 'PAG_PEND_VISTO_BUENO', 'PAG_PEND_VISTO_BUENO',
-   'Otorgar informe tecnico / visto bueno', 0, 0, NULL, 0, NULL, 0),
-
+  /* Los pasos intermedios no son transicion: sigcm.Transicion no admite
+     origen = destino (CK_sigcm_Transicion_Distinta). Los resuelve
+     pago.paOtorgarVistoBueno cambiando solo la unidad. */
   ('PAG_OTORGAR_VB_AU', 'PAG_PEND_VISTO_BUENO', 'PAG_ENTREGABLE_PRESENTADO',
    'Otorgar informe tecnico / visto bueno', 0, 0, NULL, 0, NULL, 0);
 
@@ -98,7 +98,7 @@ SELECT 'PAG_PRESENTAR_RUTA', 'PROVEEDOR'
    muestra el boton a la unidad y el perfil del paso pendiente. */
 INSERT INTO sigcm.TransicionRol (CodigoTransicion, CodigoRol)
 SELECT t.CodigoTransicion, r.CodigoRol
-  FROM (VALUES ('PAG_OTORGAR_VB_SIGUIENTE'), ('PAG_OTORGAR_VB_AU')) AS t(CodigoTransicion)
+  FROM (VALUES ('PAG_OTORGAR_VB_AU')) AS t(CodigoTransicion)
   CROSS JOIN sigcm.Rol AS r
  WHERE r.Activo = 1
    AND r.EsTecnico = 0
