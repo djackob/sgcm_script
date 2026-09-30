@@ -37,4 +37,4 @@ SIGA/integracion/habilitar_demanda_adicional.sql
 # Semillas de datos de prueba para QA: se aplican a mano y no se versionan.
 db/20_seed/S054__semilla_reporte_orden.sql
 db/20_seed/S054__semilla_reporte_orden.archivos.mjs
-db/90_pruebas/S917__muestra_anexo5_cuatro_propuestas.sql
+db/90_pruebas/

@@ -338,7 +338,10 @@ foreach ($patron in $patrones) {
 if ($ConDatosPrueba) {
     Titulo "4. Datos de prueba (solo desarrollo local)"
     $prueba = Join-Path $raiz "db\90_pruebas\S900__datos_prueba.sql"
-    if (-not (Ejecutar $prueba $Base $varSiga)) { exit 1 }
+    if (-not (Test-Path $prueba)) {
+        Escribir ("     (no existe {0}; los datos de prueba no se versionan)" -f $prueba) "DarkGray"
+    }
+    elseif (-not (Ejecutar $prueba $Base $varSiga)) { exit 1 }
 }
 
 # ---------------------------------------------------------------------------
