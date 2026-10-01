@@ -21,16 +21,17 @@ Una fila hecha a mano no sobrevive a un despliegue. Por eso está aquí.
 
 | Script | Qué hace | ¿Aprobado? |
 |---|---|---|
-| `S01__acceso_administrador.sql` | Da el perfil `P0001 ADMINISTRADOR` del sistema `S0073` a la persona que se indique | sí, aplicado en desarrollo el 2026-08-28 |
 | `S02__acceso_coordinador_oti.sql` | Crea `PE099 COORDINADOR OFICINA`, lo liga a `S0073` y se lo asigna a la persona en OTI | sí, aplicado en desarrollo el 2026-09-02 |
 | `S03__perfil_secretaria_area_usuaria.sql` | Crea `PE100 SECRETARIA OFICINA` y `PE101 SECRETARIA UNIDAD`, los liga a `S0073` y, si se le pasa un `dni`, se lo asigna | sí, aplicado en desarrollo el 2026-09-07 |
 | `S04__perfil_secretaria_abastecimiento.sql` | Crea `PE102 SECRETARIA ABASTECIMIENTO`, lo liga a `S0073` y, si se le pasa un `dni`, se lo asigna | sí, aplicado en desarrollo el 2026-09-07 |
-| `S05__acceso_especialista_sesdi.sql` | Asigna especialista de unidad SGCM en SESDI (`D0023`). En **desarrollo** el sistema es `S0073`/`PE092`; en **QA (qasso / saa_p)** es `S0059`/`PE071` | sí: DEV en `saa_` (S0073/PE092); QA en `saa_p` 2026-09-23 (dni 42574546, S0059/PE071) |
+Las asignaciones de perfil a personas concretas (`S01` administrador, `S05`
+especialista SESDI) son datos de cada ambiente: se aplican a mano y no se
+versionan (ver `.gitignore`).
 
 Se ejecutan con `psql` y llevan su propio parámetro:
 
 ```bash
-psql -h <host> -p <puerto> -U <usuario> -d saa_ -v dni=44687266 -f sso/S01__acceso_administrador.sql
+psql -h <host> -p <puerto> -U <usuario> -d saa_ -v dni=<dni> -v cod_dependencia=D0001 -f sso/S02__acceso_coordinador_oti.sql
 ```
 
 Todos son **idempotentes**: correrlos dos veces no duplica nada.

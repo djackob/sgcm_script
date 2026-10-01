@@ -38,3 +38,9 @@ SIGA/integracion/habilitar_demanda_adicional.sql
 db/20_seed/S054__semilla_reporte_orden.sql
 db/20_seed/S054__semilla_reporte_orden.archivos.mjs
 db/90_pruebas/
+
+# Scripts de datos: asignan accesos o ajustan usuarios concretos (SSO / SIGA).
+# Se aplican a mano en cada entorno y no se versionan.
+sso/S01__acceso_administrador.sql
+sso/S05__acceso_especialista_sesdi.sql
+SIGA/integracion/solo_desarrollo/*.sql

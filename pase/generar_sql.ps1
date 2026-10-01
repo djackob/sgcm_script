@@ -197,6 +197,10 @@ $cuerpoSso = New-Object System.Text.StringBuilder
 "@)
 
 foreach ($f in $incSso) {
+    if ($f -eq "sso\S01__acceso_administrador.sql" -and -not (Test-Path (Join-Path $raiz $f))) {
+        Write-Host "  (omitido $f : script de datos local, no versionado)"
+        continue
+    }
     $nl = "`r`n"
     [void]$cuerpoSso.Append(
         $nl + "-- ========== INICIO  $f ==========" + $nl +
