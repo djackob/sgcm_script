@@ -1116,7 +1116,8 @@ BEGIN
                                               AND r.CodigoTipoContratacion <> 'BIEN')
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       r.FechaModificacionAuditoria)
                          FROM requerimiento.Requerimiento AS r
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = r.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
@@ -1157,8 +1158,10 @@ BEGIN
                           AND (@CodigoTipoContratacion IS NULL OR r.CodigoTipoContratacion = @CodigoTipoContratacion)
                           AND (@Texto        IS NULL OR r.Codigo LIKE '%' + @Texto + '%'
                                                      OR r.Denominacion LIKE '%' + @Texto + '%')
-                        ORDER BY e.FechaCreacionAuditoria ASC,
-                                 r.Codigo ASC
+                        /* Ultimo cambio primero (transicion o edicion). */
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          r.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),
                    'OK' AS mensaje

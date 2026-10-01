@@ -145,6 +145,43 @@ BEGIN
             THROW 51703, @errEstado, 1;
         END
 
+        /* ---- Todas deben estar ya registradas en SIGA ----------------- */
+        /*
+          La consolidacion del Anexo 4 aprueba en SIGA lo que el Anexo 3 dejo
+          alli (integracion.MapeoCmn). Un Anexo 3 cuya inclusion sigue en cola o
+          fallo no tiene nada que aprobar: el Anexo 4 saldria firmado con una
+          solicitud que SIGA no conoce.
+        */
+        DECLARE @SinSiga nvarchar(800);
+        SELECT TOP 1 @SinSiga = CONCAT(s.Codigo,
+                   CASE WHEN o.Estado = 'ERROR'
+                        THEN CONCAT(' no pudo registrarse en SIGA: ', LEFT(o.ErrorMensaje, 300),
+                                    ' Corrija el Anexo 3 antes de incluirlo en un Anexo 4.')
+                        ELSE ' aun se esta registrando en SIGA. Espere unos segundos y vuelva a intentarlo.'
+                   END,
+                   CASE WHEN o.Estado = 'REINTENTO' AND o.ErrorMensaje IS NOT NULL
+                        THEN CONCAT(' Ultimo error: ', LEFT(o.ErrorMensaje, 300)) ELSE '' END)
+          FROM @Sel AS x
+          JOIN cmn.Solicitud AS s ON s.IdSolicitud = x.IdSolicitud
+          JOIN integracion.Operacion AS o ON o.IdSolicitud = s.IdSolicitud AND o.Activo = 1
+         WHERE o.Operacion IN ('INCLUIR_ITEM', 'EXCLUIR_ITEM')
+           AND o.Estado <> 'COMPLETADO'
+         ORDER BY CASE o.Estado WHEN 'ERROR' THEN 0 ELSE 1 END;
+
+        IF @SinSiga IS NULL
+            SELECT TOP 1 @SinSiga = CONCAT(s.Codigo,
+                       ' tiene items que no figuran registrados en SIGA. Revise la cola de integracion del Anexo 3.')
+              FROM @Sel AS x
+              JOIN cmn.Solicitud AS s ON s.IdSolicitud = x.IdSolicitud
+              JOIN cmn.SolicitudItem AS i ON i.IdSolicitud = s.IdSolicitud AND i.Activo = 1
+             WHERE NOT EXISTS (SELECT 1 FROM integracion.MapeoCmn AS m WHERE m.IdSolicitudItem = i.IdSolicitudItem);
+
+        IF @SinSiga IS NOT NULL
+        BEGIN
+            DECLARE @errSiga nvarchar(1000) = CONCAT('INTEGRACION_PENDIENTE: el Anexo 3 ', @SinSiga);
+            THROW 51715, @errSiga, 1;
+        END
+
         /* ---- Ninguna puede estar ya en otro Anexo 4 ------------------- */
         /*
           El indice unico de cmn.PaqueteSolicitud tambien lo impide, pero ahi el

@@ -463,11 +463,11 @@ BEGIN
         END
 
         SET @Orden = NULL;
-        /* Un bien (B) se valida por cantidad, no por precio: el formulario
-           no muestra el precio unitario. El monto en soles es de los servicios. */
+        /* Bienes y servicios llevan precio: SIGA calcula el monto del cuadro
+           como cantidad x precio y rechaza la inclusion con precio cero. El
+           PRECIO_REF del catalogo de bienes viene en cero, no sirve de respaldo. */
         SELECT TOP 1 @Orden = Orden FROM #Item
-         WHERE (PrecioUnitario IS NULL OR PrecioUnitario <= 0)
-           AND ISNULL(TipoBien, '') <> 'B';
+         WHERE (PrecioUnitario IS NULL OR PrecioUnitario <= 0);
         IF @Orden IS NOT NULL
         BEGIN
             SET @errItem = CONCAT('VALIDACION_PRECIO: el item ', @Orden, ' necesita un precio unitario mayor que cero.');
@@ -693,6 +693,33 @@ BEGIN
             THROW 51119, @errItem, 1;
         END
 
+        /* ---- Clasificador admitido por la familia del item ------------
+           SIGA asocia a cada familia del catalogo los clasificadores en que
+           puede programarse (SIG_FAMILIA_CLASIFICADOR). El combo del
+           formulario ofrece los clasificadores con techo de la meta y la
+           fuente, y sin este control un bien quedaba en un clasificador de
+           servicios. Solo inclusiones: exclusiones y modificaciones heredan
+           el clasificador de la linea del cuadro vigente. */
+        SET @Orden = NULL;
+        SELECT TOP 1 @Orden = i.Orden
+          FROM #Item AS i
+         WHERE i.TipoMovimiento = 'INCLUSION'
+           AND NOT EXISTS (SELECT 1 FROM siga.vwFamiliaClasificador AS f
+                            WHERE f.AnoEje = @AnoEje AND f.Activo = 1
+                              AND f.TipoBien = i.TipoBien AND f.GrupoBien = i.GrupoBien
+                              AND f.ClaseBien = i.ClaseBien AND f.FamiliaBien = i.FamiliaBien
+                              AND f.Clasificador = i.Clasificador)
+         ORDER BY i.Orden;
+        IF @Orden IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT('VALIDACION_CLASIFICADOR: el item ', @Orden, ' (',
+                (SELECT CONCAT_WS('.', TipoBien, GrupoBien, ClaseBien, FamiliaBien, ItemBien) FROM #Item WHERE Orden = @Orden),
+                ') no puede programarse en el clasificador ',
+                (SELECT Clasificador FROM #Item WHERE Orden = @Orden),
+                '. SIGA no lo admite para esa familia; elija uno de los clasificadores permitidos.');
+            THROW 51107, @errItem, 1;
+        END
+
         /* ---- Techo / saldo disponible (anio base) ---------------------
            Misma fuente que el maestro TECHO del front: SaldoPptal =
            PPTO_MODIF - PPTO_EJECU - PPTO_RESER (columna Saldo Pptal del PIM).
@@ -753,6 +780,46 @@ BEGIN
                 ', clasificador ', @ClasifTecho,
                 '. Ajuste el monto o la cantidad antes de continuar.');
             THROW 51129, @errItem, 1;
+        END
+
+        /* ---- Techo del cuadro (la cuenta de SIGA) --------------------
+           El saldo del PIM no basta: SIGA incluye contra MNTO_APROB de la
+           fase 5 menos lo ya programado en el cuadro (siga.fnDisponibleCuadro)
+           y rechaza en la cola lo que el SGCM ya dio por bueno. Se exigen las
+           dos cuentas. */
+        SET @MontoSolicitado = NULL;
+        SELECT TOP 1
+               @SecFuncTecho    = s.SecFunc,
+               @OrigenTecho     = s.Origen,
+               @FuenteTecho     = s.FuenteFinanc,
+               @ClasifTecho     = s.Clasificador,
+               @MontoSolicitado = s.MontoSolicitado,
+               @SaldoDisponible = ISNULL(d.Disponible, 0)
+          FROM (
+                SELECT i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador,
+                       MontoSolicitado = ROUND(SUM(CONVERT(decimal(18,6), p.Cantidad) * i.PrecioUnitario), 2)
+                  FROM #Item AS i
+                  JOIN #Periodo AS p ON p.Orden = i.Orden AND p.AnoOffset = 0
+                 WHERE i.TipoMovimiento = 'INCLUSION'
+                 GROUP BY i.SecFunc, i.Origen, i.FuenteFinanc, i.Clasificador
+               ) AS s
+          OUTER APPLY siga.fnDisponibleCuadro(@AnoEje, @SecEjec, @CentroCosto,
+                                              s.SecFunc, s.Origen, s.FuenteFinanc, s.Clasificador) AS d
+         WHERE s.MontoSolicitado > 0
+           AND s.MontoSolicitado > ISNULL(d.Disponible, 0);
+
+        IF @MontoSolicitado IS NOT NULL
+        BEGIN
+            SET @errItem = CONCAT(
+                'TECHO_CUADRO: el monto solicitado (S/ ',
+                CONVERT(varchar(30), @MontoSolicitado),
+                ') excede lo disponible en el techo del cuadro de SIGA (S/ ',
+                CONVERT(varchar(30), @SaldoDisponible),
+                ') para meta ', CONVERT(varchar(10), @SecFuncTecho),
+                ', fuente ', @OrigenTecho, '-', @FuenteTecho,
+                ', clasificador ', @ClasifTecho,
+                '. SIGA rechazaria la inclusion. Ajuste el monto o elija otra combinacion presupuestal.');
+            THROW 51108, @errItem, 1;
         END
 
         /* ---- Escritura ------------------------------------------------ */
@@ -1301,7 +1368,8 @@ BEGIN
                                                     AND r.CodigoRol = @CodigoRol)
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       s.FechaModificacionAuditoria)
                          FROM cmn.Solicitud AS s
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
                          JOIN sigcm.Estado     AS w ON w.CodigoEstado = e.CodigoEstado
@@ -1331,11 +1399,12 @@ BEGIN
                           AND (@CentroCosto  IS NULL OR s.CentroCosto  = @CentroCosto)
                           AND (@Texto        IS NULL OR s.Codigo LIKE '%' + @Texto + '%'
                                                      OR s.Sustento LIKE '%' + @Texto + '%')
-                        /* Mas reciente primero (creacion), luego ultima
-                           modificacion. El orden es del servidor y no del
-                           navegador porque la bandeja pagina. */
-                        ORDER BY e.FechaCreacionAuditoria DESC,
-                                 ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria) DESC
+                        /* Ultimo cambio primero (transicion del expediente o
+                           edicion de la solicitud). El orden es del servidor y
+                           no del navegador porque la bandeja pagina. */
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          s.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), '[]')),
                    'OK' AS mensaje

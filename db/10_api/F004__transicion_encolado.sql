@@ -488,6 +488,53 @@ BEGIN
                 1;
         END
 
+        /* En locacion el especialista deriva al coordinador el paquete ya
+           elaborado: el Anexo 5 y el Anexo 3 (TDR) tienen que tener su PDF. */
+        IF @CodigoTransicion IN ('REQ_DERIVAR_SIN_FIRMA', 'REQ_DERIVAR_SIN_FIRMA_OBS',
+                                 'REQ_DERIVAR_COORD', 'REQ_DERIVAR_COORD_OBS')
+        BEGIN
+            DECLARE @ReqSinAnexo varchar(40), @AnexoFaltante varchar(40);
+
+            SELECT TOP 1 @ReqSinAnexo = r.Codigo,
+                         @AnexoFaltante = CASE WHEN a3.Tiene = 0 THEN 'el Anexo 3 (TDR)'
+                                               ELSE 'el Anexo 5' END
+              FROM @Lote AS l
+              JOIN requerimiento.Requerimiento AS r
+                ON r.IdExpediente = l.IdExpediente AND r.Activo = 1
+             CROSS APPLY (SELECT Tiene = CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM sigcm.DocumentoExpediente AS de
+                              JOIN sigcm.Documento        AS d  ON d.IdDocumento = de.IdDocumento
+                              JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                               AND dv.Version = d.VersionVigente
+                             WHERE de.IdExpediente = l.IdExpediente
+                               AND d.CodigoTipoDocumento = 'REQ_TDR_LOCACION'
+                               AND d.Anulado = 0 AND d.Activo = 1
+                               AND NULLIF(LTRIM(RTRIM(dv.GeneradoDocumento)), '') IS NOT NULL)
+                          THEN 1 ELSE 0 END) AS a3
+             CROSS APPLY (SELECT Tiene = CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM sigcm.DocumentoExpediente AS de
+                              JOIN sigcm.Documento        AS d  ON d.IdDocumento = de.IdDocumento
+                              JOIN sigcm.DocumentoVersion AS dv ON dv.IdDocumento = d.IdDocumento
+                                                               AND dv.Version = d.VersionVigente
+                             WHERE de.IdExpediente = l.IdExpediente
+                               AND d.CodigoTipoDocumento = 'REQ_PROPUESTA_LOCACION'
+                               AND d.Anulado = 0 AND d.Activo = 1
+                               AND NULLIF(LTRIM(RTRIM(dv.GeneradoDocumento)), '') IS NOT NULL)
+                          THEN 1 ELSE 0 END) AS a5
+             WHERE r.CodigoTipoContratacion = 'LOCACION'
+               AND (a3.Tiene = 0 OR a5.Tiene = 0);
+
+            IF @ReqSinAnexo IS NOT NULL
+            BEGIN
+                DECLARE @errAnexo nvarchar(400) = CONCAT(
+                    'CONFLICTO_DOCUMENTO: registre ', @AnexoFaltante, ' del requerimiento ',
+                    @ReqSinAnexo, ' antes de derivarlo al coordinador.');
+                THROW 51236, @errAnexo, 1;
+            END
+        END
+
         IF @RequiereComentario = 1 AND NULLIF(LTRIM(RTRIM(@Comentario)), '') IS NULL
         BEGIN
             DECLARE @errCom nvarchar(400) = CONCAT(

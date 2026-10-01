@@ -493,14 +493,18 @@ BEGIN
                                                     AND tr.CodigoRol = @CodigoRol)
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       c.FechaModificacionAuditoria)
                          FROM #Visible AS v
                          JOIN ejecucion.Contrato AS c ON c.IdContrato = v.IdContrato
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = c.IdExpediente
                          JOIN sigcm.Estado AS w ON w.CodigoEstado = e.CodigoEstado
                          JOIN sigcm.Unidad AS uo ON uo.IdUnidad = e.IdUnidadOrigen
                          LEFT JOIN sigcm.TipoContratacion AS tc ON tc.CodigoTipoContratacion = c.TipoPrestacion
-                        ORDER BY v.MeToca DESC, w.EsFinal, c.FechaFinPrevista
+                        /* Ultimo cambio primero. */
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          c.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

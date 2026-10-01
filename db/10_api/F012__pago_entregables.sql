@@ -108,7 +108,9 @@ BEGIN
       FROM requerimiento.OrdenServicio AS o
      WHERE o.IdRequerimiento = @IdRequerimiento AND o.Activo = 1;
 
-    IF @IdOrden IS NULL
+    /* El asistente guarda la orden antes de emitirla en SIGA: sin NRO_ORDEN
+       la orden no existe para el pago. */
+    IF @IdOrden IS NULL OR NULLIF(LTRIM(RTRIM(@NumeroOrden)), '') IS NULL
         RETURN;
 
     DECLARE @Prov nvarchar(max) = COALESCE(
@@ -531,6 +533,8 @@ BEGIN
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
                                      AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     AND pago.fnAccionVistoBuenoFirma(p.IdExpedientePago, t.CodigoTransicion,
+                                                                      @IdUsuario, @CodigoRol, @IdUnidad) = 1
                                      /* Asignado por el jefe: solo el especialista elegido actua. */
                                      AND (e.IdResponsableActual IS NULL
                                           OR e.IdResponsableActual = @IdUsuario
@@ -565,7 +569,8 @@ BEGIN
                                      )
                                    ORDER BY t.CodigoTransicion
                                      FOR JSON PATH), N'[]')),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       p.FechaModificacionAuditoria)
                          FROM pago.ExpedientePago AS p
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = p.IdExpediente
                          JOIN sigcm.Estado AS w ON w.CodigoEstado = e.CodigoEstado
@@ -595,9 +600,9 @@ BEGIN
                                )
                             /* SoloMiBandeja acota a la UNIDAD, no al rol. La
                                condicion por rol no desaparecio: se movio a la
-                               columna MeToca y al ORDER BY, para que lo
-                               pendiente se marque y suba en vez de ser lo unico
-                               visible. Mismo criterio que en cmn.paListarSolicitud.
+                               columna MeToca, para que lo pendiente se marque en
+                               vez de ser lo unico visible. Mismo criterio que en
+                               cmn.paListarSolicitud.
 
                                Y la unidad sigue viendo lo que YA PASO por ella,
                                no solo lo que tiene ahora: al firmar el Anexo 11
@@ -618,14 +623,12 @@ BEGIN
                                 )
                                ))
                           )
-                        /* Primero lo que le toca a este perfil y dentro de cada
-                           grupo lo mas reciente. El orden es del servidor porque
+                        /* Ultimo cambio primero. El orden es del servidor porque
                            la bandeja pagina: ordenar en el cliente solo
                            reacomodaria la pagina que ya llego. */
-                        ORDER BY pago.fnMeToca(p.IdExpedientePago, e.CodigoEstado, e.IdUnidadActual,
-                                               e.IdResponsableActual, w.RolResponsable,
-                                               @IdUsuario, @CodigoRol, @IdUnidad) DESC,
-                                 e.FechaModificacionAuditoria DESC
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          p.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
@@ -636,6 +639,145 @@ BEGIN
             SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
     END CATCH
+END
+GO
+
+/* ========================================================================== */
+/* 6a. pago.fnDocumentosChecklist                                            */
+/* ========================================================================== */
+
+/* Archivos que sustentan cada item del checklist (Anexo 9), para revisarlos
+   al lado de la marca. Origen PAGO: documentos del expediente de pago; REQ:
+   del requerimiento; FILTRO: evidencia del filtro de idoneidad (id suelto o
+   arreglo JSON de ids, nombres separados por ' | '). Carpeta es la del file
+   server donde se subio. */
+CREATE OR ALTER FUNCTION pago.fnDocumentosChecklist (@IdExpedientePago uniqueidentifier)
+RETURNS TABLE
+AS
+RETURN
+    WITH Mapa AS (
+        SELECT CodigoItem, Origen, Codigo, Orden
+          FROM (VALUES
+                ('OS',            'REQ',    'REQ_ORDEN_SERVICIO',      1),
+                ('RHE',           'PAGO',   'PAG_RHE_PDF',             1),
+                ('RHE',           'PAGO',   'PAG_RHE_XML',             2),
+                ('RNP',           'FILTRO', 'RNP',                     1),
+                ('RUC',           'FILTRO', 'SUNAT_HABIDO',            1),
+                ('ACTA_A11',      'PAGO',   'PAG_ACTA_ANEXO11',        1),
+                ('ENTREGABLE',    'PAGO',   'PAG_INFORME_ENTREGABLE',  1),
+                ('SUSP_4TA',      'PAGO',   'PAG_SUSPENSION_4TA',      1),
+                ('CCI',           'REQ',    'REQ_COTIZACION_ANEXO6',   1),
+                ('CCI_SIAF',      'REQ',    'REQ_COTIZACION_ANEXO6',   1),
+                ('CRONOGRAMA',    'REQ',    'REQ_TDR_LOCACION',        1),
+                ('PENALIDAD_A10', 'PAGO',   'PAG_PENALIDAD_ANEXO10',   1)
+               ) AS v (CodigoItem, Origen, Codigo, Orden)
+    ),
+    Pago AS (
+        SELECT p.IdExpediente AS IdExpPago, r.IdExpediente AS IdExpReq, p.IdRequerimiento
+          FROM pago.ExpedientePago AS p
+          JOIN requerimiento.Requerimiento AS r ON r.IdRequerimiento = p.IdRequerimiento
+         WHERE p.IdExpedientePago = @IdExpedientePago
+    )
+    SELECT m.CodigoItem, m.Orden, Indice = 1,
+           NombreDocumento = COALESCE(NULLIF(dv.NombreDocumento, ''), td.Nombre),
+           GeneradoDocumento = dv.GeneradoDocumento,
+           Carpeta = CASE m.Origen WHEN 'PAGO' THEN 'pago' ELSE 'requerimiento' END
+      FROM Mapa AS m
+      CROSS JOIN Pago AS x
+      JOIN sigcm.DocumentoExpediente AS de
+        ON de.IdExpediente = CASE m.Origen WHEN 'PAGO' THEN x.IdExpPago ELSE x.IdExpReq END
+      JOIN sigcm.Documento AS d
+        ON d.IdDocumento = de.IdDocumento AND d.CodigoTipoDocumento = m.Codigo
+       AND d.Anulado = 0 AND d.Activo = 1
+      JOIN sigcm.TipoDocumento AS td ON td.CodigoTipoDocumento = d.CodigoTipoDocumento
+      JOIN sigcm.DocumentoVersion AS dv
+        ON dv.IdDocumento = d.IdDocumento AND dv.Version = d.VersionVigente
+     WHERE m.Origen IN ('PAGO', 'REQ')
+       AND NULLIF(dv.GeneradoDocumento, '') IS NOT NULL
+    UNION ALL
+    SELECT m.CodigoItem, m.Orden, Indice = ev.Indice,
+           NombreDocumento = COALESCE(NULLIF(LTRIM(RTRIM(nom.value)), ''), CONCAT(N'Evidencia ', ev.Indice)),
+           GeneradoDocumento = ev.Id,
+           Carpeta = 'requerimiento'
+      FROM Mapa AS m
+      CROSS JOIN Pago AS x
+      JOIN requerimiento.FiltroIdoneidad AS f
+        ON f.IdRequerimiento = x.IdRequerimiento AND f.CodigoFiltro = m.Codigo AND f.Activo = 1
+     CROSS APPLY (
+            SELECT Id = CONVERT(nvarchar(1000), j.value), Indice = CONVERT(int, j.[key]) + 1
+              FROM OPENJSON(CASE WHEN ISJSON(f.GeneradoDocumentoEvidencia) = 1
+                                 THEN f.GeneradoDocumentoEvidencia END) AS j
+            UNION ALL
+            SELECT LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)), 1
+             WHERE ISJSON(f.GeneradoDocumentoEvidencia) = 0
+               AND NULLIF(LTRIM(RTRIM(f.GeneradoDocumentoEvidencia)), '') IS NOT NULL
+         ) AS ev
+     OUTER APPLY (
+            SELECT TOP 1 s.value
+              FROM STRING_SPLIT(REPLACE(ISNULL(f.NombreDocumentoEvidencia, N''), N' | ', NCHAR(31)), NCHAR(31), 1) AS s
+             WHERE s.ordinal = ev.Indice
+         ) AS nom
+     WHERE m.Origen = 'FILTRO';
+GO
+
+/* ========================================================================== */
+/* 6b. pago.fnAccionVistoBuenoFirma                                          */
+/* ========================================================================== */
+
+/* Si la accion se ofrece a este actor segun la ronda de visto bueno previo a
+   la firma (V043). Con filas en el 8.1 del Anexo 3, el jefe deriva mientras
+   la ultima ronda no este completa y firma el Anexo 11 solo cuando lo esta.
+   Otorgar u observar le toca a la persona que el jefe eligio para el paso
+   pendiente mas bajo, con cualquiera de sus perfiles. El resto de
+   transiciones no depende de la ronda. */
+CREATE OR ALTER FUNCTION pago.fnAccionVistoBuenoFirma
+(
+    @IdExpedientePago uniqueidentifier,
+    @CodigoTransicion varchar(70),
+    @IdUsuario        uniqueidentifier,
+    @CodigoRol        varchar(40),
+    @IdUnidad         uniqueidentifier
+)
+RETURNS bit
+AS
+BEGIN
+    IF @CodigoTransicion NOT IN ('PAG_DERIVAR_VB_FIRMA', 'PAG_OTORGAR_VB_FIRMA',
+                                 'PAG_OBSERVAR_VB_FIRMA', 'PAG_FIRMAR_ANEXO11')
+        RETURN 1;
+
+    DECLARE @Ronda smallint =
+        (SELECT MAX(v.Ronda) FROM pago.VistoBuenoFirma AS v WHERE v.IdExpedientePago = @IdExpedientePago);
+
+    IF @CodigoTransicion IN ('PAG_OTORGAR_VB_FIRMA', 'PAG_OBSERVAR_VB_FIRMA')
+        RETURN CASE WHEN EXISTS (
+            SELECT 1
+              FROM pago.VistoBuenoFirma AS v
+             WHERE v.IdExpedientePago = @IdExpedientePago
+               AND v.Ronda = @Ronda
+               AND v.Estado = 'PENDIENTE'
+               AND v.IdUsuarioDestino = @IdUsuario
+               AND v.Orden = (SELECT MIN(v2.Orden)
+                                FROM pago.VistoBuenoFirma AS v2
+                               WHERE v2.IdExpedientePago = @IdExpedientePago
+                                 AND v2.Ronda = @Ronda
+                                 AND v2.Estado = 'PENDIENTE'))
+            THEN 1 ELSE 0 END;
+
+    DECLARE @TieneRuta bit = CASE WHEN EXISTS (
+        SELECT 1 FROM pago.RutaInformePrevio AS rv WHERE rv.IdExpedientePago = @IdExpedientePago)
+        THEN 1 ELSE 0 END;
+
+    DECLARE @Completa bit = CASE WHEN @Ronda IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM pago.VistoBuenoFirma AS v
+         WHERE v.IdExpedientePago = @IdExpedientePago
+           AND v.Ronda = @Ronda
+           AND v.Estado <> 'OTORGADO')
+        THEN 1 ELSE 0 END;
+
+    IF @CodigoTransicion = 'PAG_DERIVAR_VB_FIRMA'
+        RETURN CASE WHEN @TieneRuta = 1 AND @Completa = 0 THEN 1 ELSE 0 END;
+
+    RETURN CASE WHEN @TieneRuta = 0 OR @Completa = 1 THEN 1 ELSE 0 END;
 END
 GO
 
@@ -733,7 +875,13 @@ BEGIN
                               Checklist = JSON_QUERY(COALESCE((
                                   SELECT i.CodigoItem, i.Nombre, i.Orden, i.Obligatorio,
                                          Valor = ISNULL(m.Valor, N''),
-                                         Observacion = m.Observacion
+                                         Observacion = m.Observacion,
+                                         Documentos = JSON_QUERY(COALESCE((
+                                             SELECT dc.NombreDocumento, dc.GeneradoDocumento, dc.Carpeta
+                                               FROM pago.fnDocumentosChecklist(p.IdExpedientePago) AS dc
+                                              WHERE dc.CodigoItem = i.CodigoItem
+                                              ORDER BY dc.Orden, dc.Indice
+                                                FOR JSON PATH), N'[]'))
                                     FROM pago.ChecklistItem AS i
                                     LEFT JOIN pago.ChecklistMarca AS m
                                       ON m.CodigoItem = i.CodigoItem
@@ -755,6 +903,15 @@ BEGIN
                                    WHERE rv.IdExpedientePago = p.IdExpedientePago
                                    ORDER BY rv.Orden
                                      FOR JSON PATH), N'[]')),
+                              VistosBuenosFirma = JSON_QUERY(COALESCE((
+                                  SELECT vb.Ronda, vb.Orden, vb.NombreUnidad, vb.NombreRol,
+                                         vb.IdUsuarioDestino, vb.NombreUsuarioDestino, vb.Estado,
+                                         vb.Comentario, vb.GeneradoDocumento, vb.NombreDocumento,
+                                         vb.DerivadoEn, vb.RespondidoEn
+                                    FROM pago.VistoBuenoFirma AS vb
+                                   WHERE vb.IdExpedientePago = p.IdExpedientePago
+                                   ORDER BY vb.Ronda DESC, vb.Orden
+                                     FOR JSON PATH), N'[]')),
                               Transiciones = JSON_QUERY(COALESCE((
                                   SELECT t.CodigoTransicion, t.NombreAccion,
                                          t.CodigoEstadoDestino, EstadoDestino = d.Nombre,
@@ -769,6 +926,8 @@ BEGIN
                                                   WHERE tr.CodigoTransicion = t.CodigoTransicion
                                                     AND tr.CodigoRol = @CodigoRol)
                                      AND t.CodigoTransicion <> 'PAG_PRESENTAR_RUTA'
+                                     AND pago.fnAccionVistoBuenoFirma(p.IdExpedientePago, t.CodigoTransicion,
+                                                                      @IdUsuario, @CodigoRol, @IdUnidad) = 1
                                      /* Asignado por el jefe: solo el especialista elegido actua. */
                                      AND (e.IdResponsableActual IS NULL
                                           OR e.IdResponsableActual = @IdUsuario
@@ -930,8 +1089,11 @@ BEGIN
                                      MAX(p.NumeroOrdenSiga) AS NumeroOrdenSiga,
                                      MAX(p.NombreLocador) AS NombreLocador,
                                      MAX(p.RucLocador) AS RucLocador,
-                                     MAX(p.MontoContrato) AS MontoContrato
+                                     MAX(p.MontoContrato) AS MontoContrato,
+                                     MAX(GREATEST(ISNULL(ep.FechaModificacionAuditoria, ep.FechaCreacionAuditoria),
+                                                  p.FechaModificacionAuditoria)) AS UltimoCambio
                                 FROM pago.ExpedientePago AS p
+                                JOIN sigcm.Expediente AS ep ON ep.IdExpediente = p.IdExpediente
                                WHERE p.Activo = 1
                                  AND (
                                       (@DocIdent IS NOT NULL AND (p.DniLocador = @DocIdent OR p.RucLocador = @DocIdent))
@@ -941,7 +1103,7 @@ BEGIN
                                GROUP BY p.IdRequerimiento
                          ) AS cab
                          JOIN requerimiento.Requerimiento AS r ON r.IdRequerimiento = cab.IdRequerimiento
-                        ORDER BY cab.CodigoRequerimiento
+                        ORDER BY cab.UltimoCambio DESC, cab.CodigoRequerimiento DESC
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
         SELECT @resultado;
@@ -1351,6 +1513,9 @@ BEGIN
 
         IF @IdPago IS NULL
             THROW 51972, 'NO_ENCONTRADO: el expediente de pago no existe.', 1;
+
+        IF pago.fnAccionVistoBuenoFirma(@IdPago, 'PAG_FIRMAR_ANEXO11', @IdUsuario, @CodigoRol, @IdUnidad) = 0
+            THROW 51979, 'CONFLICTO_RUTA: faltan conformidades del visto bueno previo a la firma. Derive el expediente a las areas del Anexo 3.', 1;
 
         UPDATE pago.ExpedientePago
            SET FechaConformidadTecnica = GETDATE(),

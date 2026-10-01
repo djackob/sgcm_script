@@ -70,6 +70,11 @@ INSERT INTO @tablas (tabla) VALUES
     (N'SIG_METAS_X_CENTRO'),
     (N'UNIDAD_MEDIDA'),
     (N'CATALOGO_BIEN_SERV'),
+    /* Que clasificadores de gasto admite cada familia del catalogo y su
+       nombre: el Anexo 3 no puede llevar un bien en un clasificador de
+       servicios (siga.vwFamiliaClasificador). */
+    (N'SIG_FAMILIA_CLASIFICADOR'),
+    (N'SIG_CLASIFICADOR_GASTO'),
     /* Datos que si se mueven */
     (N'SIG_TECHO_PRESUPUESTO'),
     (N'SIG_CUADRO_MODIFICADO'),

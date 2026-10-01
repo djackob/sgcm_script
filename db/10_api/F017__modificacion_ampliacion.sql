@@ -332,7 +332,8 @@ BEGIN
                               DiasPlazo = (SELECT TOP 1 DATEDIFF(DAY, @Hoy, COALESCE(pl.AmpliadoHasta, pl.Vencimiento)) FROM sigcm.Plazo AS pl
                                             WHERE pl.IdExpediente = e.IdExpediente AND pl.Estado = 'EN_CURSO' AND pl.Activo = 1 ORDER BY pl.Vencimiento),
                               Transiciones = JSON_QUERY(ampliacion.fnTransicionesJson(e.CodigoEstado, @CodigoRol)),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       s.FechaModificacionAuditoria)
                          FROM #Visible AS v
                          JOIN ampliacion.Solicitud AS s ON s.IdSolicitud = v.IdSolicitud
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = s.IdExpediente
@@ -340,7 +341,10 @@ BEGIN
                          JOIN ejecucion.Contrato AS c ON c.IdContrato = s.IdContrato
                          JOIN sigcm.Expediente AS ec ON ec.IdExpediente = c.IdExpediente
                          JOIN sigcm.Unidad AS uo ON uo.IdUnidad = e.IdUnidadOrigen
-                        ORDER BY v.MeToca DESC, w.EsFinal, s.FechaPresentacion DESC
+                        /* Ultimo cambio primero. */
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          s.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

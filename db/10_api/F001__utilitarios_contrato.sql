@@ -578,7 +578,16 @@ BEGIN
                catalogo de la ejecutora un LIKE tarda 28 ms medidos. */
             SET @Datos = (SELECT TOP (@Limite) c.CodigoItem, c.TipoBien, c.GrupoBien, c.ClaseBien,
                                  c.FamiliaBien, c.ItemBien, c.Descripcion, c.UnidadMedida,
-                                 c.PrecioRef, c.Activo
+                                 c.PrecioRef, c.Activo,
+                                 /* Clasificadores que SIGA admite para la familia;
+                                    el formulario solo ofrece estos. */
+                                 Clasificadores = JSON_QUERY(COALESCE((
+                                     SELECT DISTINCT f.Clasificador
+                                       FROM siga.vwFamiliaClasificador AS f
+                                      WHERE f.AnoEje = @AnoEje AND f.Activo = 1
+                                        AND f.TipoBien = c.TipoBien AND f.GrupoBien = c.GrupoBien
+                                        AND f.ClaseBien = c.ClaseBien AND f.FamiliaBien = c.FamiliaBien
+                                        FOR JSON PATH), N'[]'))
                             FROM siga.vwCatalogoItem AS c
                            WHERE c.SecEjec = @SecEjec
                              AND c.Activo = 1
@@ -649,6 +658,12 @@ BEGIN
                                  MontoTecho0      = MarcoPptal,
                                  MontoUsado0      = FaseCompromiso + ReservaPptal,
                                  MontoDisponible0 = SaldoPptal,
+                                 /* Lo que queda del techo del cuadro para la
+                                    combinacion (la cuenta de SIGA al incluir).
+                                    Es por combinacion: se repite en cada fila. */
+                                 DisponibleCuadro0 = (SELECT d.Disponible
+                                                        FROM siga.fnDisponibleCuadro(AnoEje, SecEjec, CentroCosto,
+                                                             SecFunc, Origen, FuenteFinanc, Clasificador) AS d),
                                  MontoProg1, MontoProg2, MontoProg3
                             FROM siga.vwTechoPresupuesto
                            WHERE AnoEje = @AnoEje AND SecEjec = @SecEjec

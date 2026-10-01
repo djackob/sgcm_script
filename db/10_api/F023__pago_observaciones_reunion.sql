@@ -8,7 +8,7 @@
   pago.fnCodigoExpedientePago) y de S052.
 
    1. sigcm.fnSiguienteDiaHabil
-   2. pago.fnCodigoExpedientePago
+   2. pago.fnCodigoExpedientePago / pago.paRecodificarExpedientePago
    3. pago.fnMeToca
    4. pago.paAsignarEspecialista
    5. pago.paNotificarObservacion
@@ -45,8 +45,9 @@ GO
 /* 2. pago.fnCodigoExpedientePago                                            */
 /* ========================================================================== */
 
-/* (nro.pago-OS/OC)_(nro O/S u O/C)_(nro entregable). El nro. de pago es el
-   correlativo de paSiguienteCodigo ('PAG-AAAA-000123' -> '000123'). */
+/* PAGO_(OS|OC)(nro de orden)_(nro de entregable): PAGO_OS1532_3. El nro. de
+   orden numerico va sin ceros a la izquierda. @CodigoBase queda por
+   compatibilidad con los llamadores. */
 CREATE OR ALTER FUNCTION pago.fnCodigoExpedientePago
 (
     @CodigoBase       varchar(40),
@@ -57,12 +58,48 @@ CREATE OR ALTER FUNCTION pago.fnCodigoExpedientePago
 RETURNS varchar(40)
 AS
 BEGIN
-    DECLARE @Seq varchar(10) = RIGHT(@CodigoBase, 6);
-    IF @Seq LIKE '%[^0-9]%' SET @Seq = RIGHT(REPLACE(@CodigoBase, '-', ''), 6);
+    DECLARE @Orden varchar(40) = LTRIM(RTRIM(ISNULL(@NumeroOrden, '')));
+    IF @Orden <> '' AND @Orden NOT LIKE '%[^0-9]%'
+        SET @Orden = CONVERT(varchar(40), TRY_CONVERT(decimal(38, 0), @Orden));
 
-    RETURN LEFT(CONCAT(@Seq, '-', ISNULL(NULLIF(@TipoOrden, ''), 'OS'), '_',
-                       LTRIM(RTRIM(ISNULL(@NumeroOrden, ''))), '_',
+    RETURN LEFT(CONCAT('PAGO_', ISNULL(NULLIF(@TipoOrden, ''), 'OS'), @Orden, '_',
                        CONVERT(varchar(5), @NumeroEntregable)), 40);
+END
+GO
+
+/* Copia el NRO_ORDEN de SIGA a los pagos del requerimiento y les asigna el
+   codigo PAGO_... Los pagos se abren antes de que SIGA devuelva la orden, asi
+   que nacen con el codigo provisional PAG-AAAA-NNNNNN. Si el codigo ya lo usa
+   otro expediente (misma orden en otro ano), se conserva el provisional. */
+CREATE OR ALTER PROCEDURE pago.paRecodificarExpedientePago
+    @IdRequerimiento uniqueidentifier
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @NumeroOrden varchar(40) = (
+        SELECT TOP 1 NULLIF(LTRIM(RTRIM(o.NumeroOrden)), '')
+          FROM requerimiento.OrdenServicio AS o
+         WHERE o.IdRequerimiento = @IdRequerimiento AND o.Activo = 1);
+
+    IF @NumeroOrden IS NOT NULL
+        UPDATE pago.ExpedientePago
+           SET NumeroOrdenSiga = @NumeroOrden
+         WHERE IdRequerimiento = @IdRequerimiento
+           AND Activo = 1
+           AND NULLIF(NumeroOrdenSiga, '') IS NULL;
+
+    UPDATE e
+       SET e.Codigo = n.Codigo
+      FROM sigcm.Expediente AS e
+      JOIN pago.ExpedientePago AS p ON p.IdExpediente = e.IdExpediente
+     CROSS APPLY (SELECT Codigo = pago.fnCodigoExpedientePago(
+                      e.Codigo, p.TipoOrden, p.NumeroOrdenSiga, p.NumeroEntregable)) AS n
+     WHERE p.IdRequerimiento = @IdRequerimiento
+       AND p.Activo = 1
+       AND NULLIF(p.NumeroOrdenSiga, '') IS NOT NULL
+       AND e.Codigo <> n.Codigo
+       AND NOT EXISTS (SELECT 1 FROM sigcm.Expediente AS x WHERE x.Codigo = n.Codigo);
 END
 GO
 
@@ -101,10 +138,16 @@ BEGIN
                                   AND rv2.Otorgado = 0))
             THEN 1 ELSE 0 END;
 
+    IF @CodigoEstado = 'PAG_VB_PREVIO_FIRMA'
+        RETURN pago.fnAccionVistoBuenoFirma(@IdExpedientePago, 'PAG_OTORGAR_VB_FIRMA',
+                                            @IdUsuario, @CodigoRol, @IdUnidad);
+
     IF @IdUnidadActual = @IdUnidad
        AND (@RolResponsable = @CodigoRol
             OR (@RolResponsable = 'AREA_JEFE' AND @CodigoRol = 'AREA_SECRETARIA'
-                AND @CodigoEstado <> 'PAG_CONFORMIDAD_PEND_FIRMA'))
+                AND (@CodigoEstado <> 'PAG_CONFORMIDAD_PEND_FIRMA'
+                     OR pago.fnAccionVistoBuenoFirma(@IdExpedientePago, 'PAG_DERIVAR_VB_FIRMA',
+                                                     @IdUsuario, @CodigoRol, @IdUnidad) = 1)))
        AND (@IdResponsableActual IS NULL OR @IdResponsableActual = @IdUsuario)
         RETURN 1;
 

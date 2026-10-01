@@ -12,8 +12,13 @@
   Modulos trae el desglose por modulo; BuscarCodigo es el codigo con el que la
   bandeja del modulo encuentra la fila (una entrega se busca por su contrato).
   Abastecimiento ve los plazos de toda la entidad; el resto, los de su unidad.
+    Nuevas     : alertas que el actor aun no abrio (sigcm.AlertaVista, V041).
+                 Es lo que cuenta el globo de la campana.
 
-  Depende de F023 (pago.paResumenAlertas).
+  sigcm.paMarcarAlertaVista
+    Registra que el actor abrio la alerta de un expediente.
+
+  Depende de F023 (pago.paResumenAlertas) y V041.
 */
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
@@ -51,8 +56,9 @@ BEGIN
         DECLARE @Items TABLE (
             IdExpediente uniqueidentifier, CodigoModulo varchar(30), Codigo varchar(40),
             BuscarCodigo varchar(40), Estado varchar(150), Descripcion nvarchar(400),
-            FechaLimite date, Tipo varchar(20), Prioridad int);
-        DECLARE @Conteo TABLE (CodigoModulo varchar(30) PRIMARY KEY, Pendientes int, PorVencer int, Vencidos int);
+            FechaLimite date, Tipo varchar(20), Prioridad int, Nueva bit NOT NULL DEFAULT 1);
+        DECLARE @Conteo TABLE (CodigoModulo varchar(30) PRIMARY KEY, Pendientes int, PorVencer int, Vencidos int,
+                               Nuevas int NOT NULL DEFAULT 0);
 
         /* PAGO: su propio resumen ya resuelve asignacion, vistos buenos y proveedor. */
         DECLARE @Pago TABLE (Json nvarchar(max));
@@ -61,11 +67,12 @@ BEGIN
 
         IF ISJSON(@JsonPago) = 1 AND JSON_VALUE(@JsonPago, '$.estado') = '1'
         BEGIN
-            INSERT INTO @Conteo
+            INSERT INTO @Conteo (CodigoModulo, Pendientes, PorVencer, Vencidos)
             SELECT 'PAGO', JSON_VALUE(@JsonPago, '$.Pendientes'),
                    JSON_VALUE(@JsonPago, '$.PorVencer'), JSON_VALUE(@JsonPago, '$.Vencidos');
 
-            INSERT INTO @Items
+            INSERT INTO @Items (IdExpediente, CodigoModulo, Codigo, BuscarCodigo, Estado, Descripcion,
+                                FechaLimite, Tipo, Prioridad)
             SELECT i.IdExpediente, 'PAGO', i.Codigo, i.Codigo, i.Estado,
                    CONCAT(i.NombreEntregable, CASE WHEN i.NombreLocador IS NOT NULL THEN N' · ' + i.NombreLocador END),
                    i.FechaLimite, i.Tipo,
@@ -111,33 +118,47 @@ BEGIN
                AND pl.Estado IN ('EN_CURSO', 'VENCIDO')
                AND COALESCE(pl.AmpliadoHasta, pl.Vencimiento) <= @Limite7
         )
-        INSERT INTO @Items
+        INSERT INTO @Items (IdExpediente, CodigoModulo, Codigo, BuscarCodigo, Estado, Descripcion,
+                            FechaLimite, Tipo, Prioridad)
         SELECT b.IdExpediente, b.CodigoModulo, b.Codigo, b.BuscarCodigo, b.Estado, Pl.Nombre, Pl.Vence,
                CASE WHEN Pl.Vence < @Hoy THEN 'VENCIDO' ELSE 'POR_VENCER' END,
                CASE WHEN Pl.Vence < @Hoy THEN 1 ELSE 2 END
           FROM Pl JOIN @Base AS b ON b.IdExpediente = Pl.IdExpediente
          WHERE Pl.Orden = 1;
 
-        INSERT INTO @Items
+        INSERT INTO @Items (IdExpediente, CodigoModulo, Codigo, BuscarCodigo, Estado, Descripcion,
+                            FechaLimite, Tipo, Prioridad)
         SELECT b.IdExpediente, b.CodigoModulo, b.Codigo, b.BuscarCodigo, b.Estado, NULL, NULL, 'PENDIENTE', 3
           FROM @Base AS b
          WHERE b.MeToca = 1
            AND NOT EXISTS (SELECT 1 FROM @Items AS i WHERE i.IdExpediente = b.IdExpediente);
 
-        INSERT INTO @Conteo
+        INSERT INTO @Conteo (CodigoModulo, Pendientes, PorVencer, Vencidos)
         SELECT m.CodigoModulo,
                (SELECT COUNT(*) FROM @Base AS b WHERE b.CodigoModulo = m.CodigoModulo AND b.MeToca = 1),
                (SELECT COUNT(*) FROM @Items AS i WHERE i.CodigoModulo = m.CodigoModulo AND i.Tipo = 'POR_VENCER'),
                (SELECT COUNT(*) FROM @Items AS i WHERE i.CodigoModulo = m.CodigoModulo AND i.Tipo = 'VENCIDO')
           FROM (SELECT DISTINCT CodigoModulo FROM @Base) AS m;
 
+        UPDATE i SET i.Nueva = 0
+          FROM @Items AS i
+          JOIN sigcm.AlertaVista AS v ON v.IdUsuario = @IdUsuario AND v.IdExpediente = i.IdExpediente
+                                     AND v.Tipo = i.Tipo
+          JOIN sigcm.Expediente AS e ON e.IdExpediente = i.IdExpediente
+         WHERE v.VersionExpediente >= e.Version;
+
+        UPDATE c SET c.Nuevas = (SELECT COUNT(*) FROM @Items AS i
+                                  WHERE i.CodigoModulo = c.CodigoModulo AND i.Nueva = 1)
+          FROM @Conteo AS c;
+
         SELECT @resultado = (
             SELECT 1 AS estado,
                    Pendientes = (SELECT ISNULL(SUM(Pendientes), 0) FROM @Conteo),
                    PorVencer  = (SELECT ISNULL(SUM(PorVencer), 0) FROM @Conteo),
                    Vencidos   = (SELECT ISNULL(SUM(Vencidos), 0) FROM @Conteo),
+                   Nuevas     = (SELECT ISNULL(SUM(Nuevas), 0) FROM @Conteo),
                    Modulos = JSON_QUERY(COALESCE((
-                       SELECT c.CodigoModulo, Modulo = m.Nombre, c.Pendientes, c.PorVencer, c.Vencidos
+                       SELECT c.CodigoModulo, Modulo = m.Nombre, c.Pendientes, c.PorVencer, c.Vencidos, c.Nuevas
                          FROM @Conteo AS c
                          JOIN sigcm.Modulo AS m ON m.CodigoModulo = c.CodigoModulo
                         WHERE c.Pendientes + c.PorVencer + c.Vencidos > 0
@@ -146,13 +167,72 @@ BEGIN
                    Items = JSON_QUERY(COALESCE((
                        SELECT TOP 40 i.IdExpediente, i.CodigoModulo, Modulo = m.Nombre, i.Codigo, i.BuscarCodigo,
                               i.Estado, i.Descripcion, i.FechaLimite, i.Tipo,
-                              DiasParaVencer = DATEDIFF(DAY, @Hoy, i.FechaLimite)
+                              DiasParaVencer = DATEDIFF(DAY, @Hoy, i.FechaLimite),
+                              i.Nueva
                          FROM @Items AS i
                          JOIN sigcm.Modulo AS m ON m.CodigoModulo = i.CodigoModulo
-                        ORDER BY i.Prioridad, i.FechaLimite, m.Orden, i.Codigo
+                        ORDER BY i.Nueva DESC, i.Prioridad, i.FechaLimite, m.Orden, i.Codigo
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
         SELECT @resultado;
+    END TRY
+    BEGIN CATCH
+        SELECT (
+            SELECT 0 AS estado, ERROR_MESSAGE() AS mensaje, ERROR_NUMBER() AS codigo
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
+    END CATCH
+END
+GO
+
+/*
+  Entrada: { "IdExpediente":"...", "Tipo":"VENCIDO|POR_VENCER|PENDIENTE" }
+  Guarda la Version actual del expediente: si despues se mueve, la alerta
+  vuelve a contar como nueva.
+*/
+CREATE OR ALTER PROCEDURE sigcm.paMarcarAlertaVista
+    @parametro nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+    SET LOCK_TIMEOUT 5000;
+
+    BEGIN TRY
+        IF ISJSON(@parametro) <> 1
+            THROW 52402, 'JSON incorrecto.', 1;
+
+        DECLARE @IdUsuario uniqueidentifier, @Cuenta varchar(120),
+                @NombreCompleto varchar(250), @Cargo varchar(180),
+                @CodigoRol varchar(40), @IdUnidad uniqueidentifier,
+                @CentroCostoActor varchar(15), @EsTitular bit,
+                @Ip varchar(45), @Equipo varchar(50), @Programa varchar(50),
+                @CorrelacionId uniqueidentifier;
+
+        EXEC sigcm.paResolverActor @parametro,
+             @IdUsuario OUTPUT, @Cuenta OUTPUT, @NombreCompleto OUTPUT, @Cargo OUTPUT,
+             @CodigoRol OUTPUT, @IdUnidad OUTPUT, @CentroCostoActor OUTPUT, @EsTitular OUTPUT,
+             @Ip OUTPUT, @Equipo OUTPUT, @Programa OUTPUT, @CorrelacionId OUTPUT;
+
+        DECLARE @IdExpediente uniqueidentifier = TRY_CONVERT(uniqueidentifier, JSON_VALUE(@parametro, '$.IdExpediente'));
+        DECLARE @Tipo varchar(20) = JSON_VALUE(@parametro, '$.Tipo');
+        DECLARE @Version int;
+
+        IF @Tipo NOT IN ('VENCIDO', 'POR_VENCER', 'PENDIENTE')
+            THROW 52403, 'Tipo de alerta invalido. Valores: VENCIDO, POR_VENCER, PENDIENTE.', 1;
+
+        SELECT @Version = Version FROM sigcm.Expediente WHERE IdExpediente = @IdExpediente;
+        IF @Version IS NULL
+            THROW 52404, 'El expediente no existe.', 1;
+
+        UPDATE sigcm.AlertaVista
+           SET Tipo = @Tipo, VersionExpediente = @Version, FechaVista = GETDATE()
+         WHERE IdUsuario = @IdUsuario AND IdExpediente = @IdExpediente;
+
+        IF @@ROWCOUNT = 0
+            INSERT INTO sigcm.AlertaVista (IdUsuario, IdExpediente, Tipo, VersionExpediente)
+            VALUES (@IdUsuario, @IdExpediente, @Tipo, @Version);
+
+        SELECT (SELECT 1 AS estado FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);
     END TRY
     BEGIN CATCH
         SELECT (

@@ -298,7 +298,8 @@ BEGIN
                               DiasSubsanacion = CASE WHEN e.CodigoEstado = 'RES_APERCIBIDO' THEN DATEDIFF(DAY, @Hoy, p.FechaLimiteSubsanacion) END,
                               p.ResultadoApercibimiento, p.ResultadoDec, p.FechaResolucion, p.NotificadaEn,
                               Transiciones = JSON_QUERY(resolucion.fnTransicionesJson(e.CodigoEstado, @CodigoRol)),
-                              ActualizadoEn = ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria)
+                              ActualizadoEn = GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                                       p.FechaModificacionAuditoria)
                          FROM #Visible AS v
                          JOIN resolucion.Procedimiento AS p ON p.IdProcedimiento = v.IdProcedimiento
                          JOIN sigcm.Expediente AS e ON e.IdExpediente = p.IdExpediente
@@ -306,7 +307,10 @@ BEGIN
                          JOIN ejecucion.Contrato AS c ON c.IdContrato = p.IdContrato
                          JOIN sigcm.Expediente AS ec ON ec.IdExpediente = c.IdExpediente
                          JOIN sigcm.Unidad AS uo ON uo.IdUnidad = e.IdUnidadOrigen
-                        ORDER BY v.MeToca DESC, w.EsFinal, p.FechaInicio DESC
+                        /* Ultimo cambio primero. */
+                        ORDER BY GREATEST(ISNULL(e.FechaModificacionAuditoria, e.FechaCreacionAuditoria),
+                                          p.FechaModificacionAuditoria) DESC,
+                                 e.FechaCreacionAuditoria DESC
                         OFFSET @Desplazamiento ROWS FETCH NEXT @Limite ROWS ONLY
                           FOR JSON PATH), N'[]'))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);

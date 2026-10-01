@@ -248,6 +248,18 @@ BEGIN
                        ProgramaModificacionAuditoria = @Programa
                  WHERE IdOperacion = @id;
 
+                /* Ya hay orden en SIGA: un fallo aqui no puede devolver la
+                   operacion a REINTENTO porque se emitiria otra orden. */
+                IF @modoReal = 'real'
+                   AND OBJECT_ID(N'pago.paRecodificarExpedientePago', N'P') IS NOT NULL
+                BEGIN
+                    BEGIN TRY
+                        EXEC pago.paRecodificarExpedientePago @IdRequerimiento = @idReq;
+                    END TRY
+                    BEGIN CATCH
+                    END CATCH
+                END
+
                 INSERT INTO @detalle (IdOperacion, Secuencia, Resultado, NroOrden, Mensaje)
                 VALUES (@id, @sec,
                         CASE WHEN @modoReal = 'real' THEN 'ESCRITO' ELSE 'SIMULADO' END,
